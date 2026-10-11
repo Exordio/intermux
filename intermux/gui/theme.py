@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import os
 import tkinter as tk
 from tkinter import ttk
+
+ICONS_DIR = os.path.join(os.path.dirname(__file__), "icons")
+ICON_SIZES = (256, 128, 64, 48, 32)
 
 BG = "#0d1117"
 FG = "#c9d1d9"
@@ -17,6 +21,9 @@ FONT = ("monospace", 10)
 
 def apply(root: tk.Tk) -> None:
     root.configure(bg=BG)
+    # Kept on the root: Tk drops an image as soon as Python no longer references it.
+    root.icons = [tk.PhotoImage(file=os.path.join(ICONS_DIR, f"intermux-{size}.png")) for size in ICON_SIZES]
+    root.iconphoto(True, *root.icons)
     # The drop-down list of a combobox is a plain Tk listbox, styled through the option database.
     root.option_add("*TCombobox*Listbox.background", FIELD)
     root.option_add("*TCombobox*Listbox.foreground", FG)

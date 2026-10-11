@@ -364,6 +364,8 @@ def main() -> None:
     env = session_env(user)
     allow_root_on_display(user, env)
 
-    root = tk.Tk()
+    # Tk turns this into the window class "Intermux", which intermux.desktop names in StartupWMClass
+    # so that the panel shows the app icon.
+    root = tk.Tk(className="intermux")
     App(root, user, env.get("XDG_SESSION_TYPE", "x11"))
     root.mainloop()
