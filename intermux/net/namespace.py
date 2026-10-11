@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import logging
 import os
 import re
@@ -14,7 +15,7 @@ from typing import Callable
 from intermux.apps import processes
 from intermux.net import dns, interfaces, registry, shaping, traffic
 from intermux.net.interfaces import Interface
-from intermux.system.shell import IP, IPTABLES, SYSCTL, run
+from intermux.system.shell import IP, IPTABLES, SYSCTL, run, which
 
 log = logging.getLogger(__name__)
 
@@ -35,13 +36,16 @@ _LEGACY_RT_TABLES = ("/etc/iproute2/rt_tables", "/usr/share/iproute2/rt_tables")
 
 @dataclass(frozen=True)
 class Namespace:
-    """All names and numbers derive from the interface name, so they are stable across runs."""
+    """All names and numbers derive from the key, which derives from the interface name the namespace was
+    created for. A namespace moved to another interface keeps its key, so the name alone does not tell
+    which interface it serves: use serving() and for_interface()."""
 
     key: str
 
     @classmethod
-    def for_interface(cls, iface: str) -> Namespace:
-        return cls(hashlib.md5(iface.encode()).hexdigest()[:8])
+    def derive(cls, iface: str, attempt: int = 0) -> Namespace:
+        seed = iface if attempt == 0 else f"{iface}#{attempt}"
+        return cls(hashlib.md5(seed.encode()).hexdigest()[:8])
 
     @classmethod
     def from_name(cls, name: str) -> Namespace:
@@ -110,6 +114,22 @@ def existing() -> list[Namespace]:
     return [Namespace(match.group(1)) for match in map(_NAME.match, names) if match]
 
 
+def serving(iface: str) -> list[Namespace]:
+    """Live namespaces that route through the interface."""
+    return [ns for ns in existing() if _interface_of(ns) == iface]
+
+
+def for_interface(iface: str) -> Namespace:
+    """The namespace serving the interface, or a free name and subnet for a new one."""
+    live = existing()
+    for ns in live:
+        if _interface_of(ns) == iface:
+            return ns
+    taken = {ns.octet for ns in live}
+    candidates = (Namespace.derive(iface, attempt) for attempt in itertools.count())
+    return next(ns for ns in candidates if ns not in live and ns.octet not in taken)
+
+
 def setup(iface: Interface, dns_servers: list[str] | None = None) -> Namespace:
     """Create the namespace for the interface, or rewire it if it already exists.
 
@@ -117,7 +137,7 @@ def setup(iface: Interface, dns_servers: list[str] | None = None) -> Namespace:
     dns_servers=None keeps the servers of a reused namespace and picks them
     automatically for a new one, see dns.auto_servers().
     """
-    ns = Namespace.for_interface(iface.name)
+    ns = for_interface(iface.name)
     previous = registry.load(ns.name)
     if _is_alive(ns):
         log.info("Reusing %s for %s (%s)", ns.name, iface.name, ns.subnet)
@@ -185,18 +205,37 @@ def active() -> list[State]:
     return result
 
 
+def move(ns: Namespace, iface: Interface) -> None:
+    """Route the namespace through another interface. Apps keep running; their open connections break."""
+    entry = registry.load(ns.name)
+    log.info("Moving %s to %s", ns.name, iface.name)
+    _unwire(ns)
+    route = _wire(ns, iface)
+    # Established flows keep the NAT of the old interface in conntrack; drop them so they reconnect.
+    if which("conntrack"):
+        run("conntrack", "-D", "-s", ns.subnet, check=False)
+    else:
+        log.warning("conntrack is not installed, open UDP flows of %s may keep using the old address", ns.name)
+    if entry:
+        entry.interface = iface.name
+        entry.route = " ".join(route) if route else "none"
+        registry.save(entry)
+        if entry.dns_auto:
+            set_dns(ns, None)
+
+
 def reconnect(ns: Namespace) -> bool:
     """Route the namespace through its interface again, e.g. after a VPN reconnect.
 
     Returns False if the interface is still not usable.
     """
-    entry = registry.load(ns.name)
-    iface = interfaces.find(entry.interface if entry else _guess_interface(ns, {}))
+    iface = interfaces.find(_interface_of(ns))
     if iface is None or not iface.up or _default_route(iface) is None:
         return False
     log.info("Reconnecting %s to %s", ns.name, iface.name)
     _unwire(ns)
     route = _wire(ns, iface)
+    entry = registry.load(ns.name)
     if entry:
         entry.route = " ".join(route) if route else "none"
         registry.save(entry)
@@ -236,7 +275,12 @@ def reset() -> None:
 def _guess_interface(ns: Namespace, known: dict[str, Interface]) -> str:
     """For namespaces created before the registry existed."""
     names = known or {iface.name: iface for iface in interfaces.all_interfaces()}
-    return next((name for name in names if Namespace.for_interface(name) == ns), "?")
+    return next((name for name in names if Namespace.derive(name) == ns), "?")
+
+
+def _interface_of(ns: Namespace) -> str:
+    entry = registry.load(ns.name)
+    return entry.interface if entry else _guess_interface(ns, {})
 
 
 def _connection(ns: Namespace, iface: Interface | None) -> str:

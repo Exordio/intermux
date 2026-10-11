@@ -14,7 +14,7 @@ from intermux.gui import theme
 from intermux.gui.dialogs import ask_on_running
 from intermux.log import setup as setup_logging
 from intermux.net import dns, interfaces, namespace, shaping, traffic
-from intermux.net.namespace import Namespace, State
+from intermux.net.namespace import State
 from intermux.system import deps
 from intermux.system.privileges import is_root, reexec_as_root
 from intermux.system.session import allow_root_on_display, session_env
@@ -88,7 +88,8 @@ class App:
             buttons=[
                 [("Stop", lambda: self.stop(force=False)), ("Kill", lambda: self.stop(force=True)),
                  ("Restart", self.restart), ("Remove namespace", self.remove)],
-                [("Set DNS", self.set_dns), ("Set limit", self.set_limits), ("Reset Everything", self.reset)],
+                [("Move to interface", self.move), ("Set DNS", self.set_dns), ("Set limit", self.set_limits),
+                 ("Reset Everything", self.reset)],
             ],
             controls=self._limit_controls,
         )
@@ -255,7 +256,7 @@ class App:
             messagebox.showerror("Invalid DNS", str(exc))
             return
 
-        ns = Namespace.for_interface(iface)
+        ns = namespace.for_interface(iface)
         exists = ns in namespace.existing()
         dns_text = ", ".join(servers) if servers else "unchanged" if exists else "auto"
         self.pending.append((path, iface, servers))
@@ -291,6 +292,26 @@ class App:
             return
         namespace.set_dns(selection[0].ns, servers)
         self.refresh_active()
+
+    def move(self) -> None:
+        """Route the selected namespace through the interface chosen at the top of the window."""
+        selection = self._selection()
+        if not selection:
+            return
+        state = selection[0]
+        target = interfaces.find(self.iface_box.get())
+        if target is None or not target.up:
+            messagebox.showerror("Move", "Select an active interface at the top of the window.")
+            return
+        if target.name == state.entry.interface:
+            return
+        if messagebox.askyesno(
+            "Move to interface",
+            f"Route {state.entry.namespace} through {target.name} instead of {state.entry.interface}?\n\n"
+            "Apps keep running, their open connections will break.",
+        ):
+            namespace.move(state.ns, target)
+            self.refresh_active()
 
     def set_limits(self) -> None:
         selection = self._selection()

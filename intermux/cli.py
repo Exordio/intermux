@@ -61,17 +61,15 @@ def cmd_assign(args: argparse.Namespace) -> int:
 
 
 def cmd_dns(args: argparse.Namespace) -> int:
-    ns = Namespace.for_interface(args.iface)
-    if ns not in namespace.existing():
-        print(f"Error: no namespace for {args.iface}, start an app through it first.")
-        return 1
     try:
-        servers = namespace.set_dns(ns, _parse_dns(args.servers))
+        servers = _parse_dns(args.servers)
     except ValueError as exc:
         print(f"Error: {exc}")
         return 1
-    print(f"{ns.name}: {', '.join(servers)}")
-    return 0
+    found = _serving(args.iface)
+    for ns in found:
+        print(f"{ns.name}: {', '.join(namespace.set_dns(ns, servers))}")
+    return 0 if found else 1
 
 
 def cmd_stop(args: argparse.Namespace) -> int:
@@ -91,23 +89,32 @@ def cmd_restart(args: argparse.Namespace) -> int:
 
 
 def cmd_remove(args: argparse.Namespace) -> int:
-    states = [state for state in namespace.active() if state.entry.interface == args.iface]
-    for state in states:
-        binding.remove_namespace(state)
-        print(f"Removed {state.entry.namespace} with everything running in it")
-    if not states:
-        print(f"Error: no namespace for {args.iface}.")
-    return 0 if states else 1
+    found = _serving(args.iface)
+    for state in namespace.active():
+        if state.ns in found:
+            binding.remove_namespace(state)
+            print(f"Removed {state.entry.namespace} with everything running in it")
+    return 0 if found else 1
 
 
 def cmd_limit(args: argparse.Namespace) -> int:
-    ns = Namespace.for_interface(args.iface)
-    if ns not in namespace.existing():
-        print(f"Error: no namespace for {args.iface}, start an app through it first.")
+    found = _serving(args.iface)
+    for ns in found:
+        namespace.set_limits(ns, args.down or None, args.up or None)
+        print(f"{ns.name}: down {shaping.format_mbit(args.down)}, up {shaping.format_mbit(args.up)} Mbit/s")
+    return 0 if found else 1
+
+
+def cmd_move(args: argparse.Namespace) -> int:
+    target = interfaces.find(args.to)
+    if target is None or not target.up:
+        print(f"Error: interface {args.to} is not up.")
         return 1
-    namespace.set_limits(ns, args.down or None, args.up or None)
-    print(f"{ns.name}: down {shaping.format_mbit(args.down)}, up {shaping.format_mbit(args.up)} Mbit/s")
-    return 0
+    found = _serving(args.iface)
+    for ns in found:
+        namespace.move(ns, target)
+        print(f"{ns.name} now goes through {target.name}")
+    return 0 if found else 1
 
 
 def cmd_reconnect(args: argparse.Namespace) -> int:
@@ -131,6 +138,13 @@ def cmd_check(args: argparse.Namespace) -> int:
     for tool, hint in missing:
         print(f"  {tool}: {hint}")
     return 1
+
+
+def _serving(iface: str) -> list[Namespace]:
+    found = namespace.serving(iface)
+    if not found:
+        print(f"Error: no namespace serves {iface}, start an app through it first.")
+    return found
 
 
 def _find_app(name: str, iface: str | None) -> list[tuple[State, str]]:
@@ -181,6 +195,10 @@ def main(argv: list[str] | None = None) -> int:
     limit.add_argument("--down", type=float, help="download limit, Mbit/s")
     limit.add_argument("--up", type=float, help="upload limit, Mbit/s")
     limit.set_defaults(func=cmd_limit, root=True)
+    move = commands.add_parser("move", help="route a namespace through another interface without stopping apps")
+    move.add_argument("--iface", required=True, help="interface the namespace serves now")
+    move.add_argument("--to", required=True, help="interface to route it through")
+    move.set_defaults(func=cmd_move, root=True)
     remove = commands.add_parser("remove", help="stop everything in a namespace and remove it")
     remove.add_argument("--iface", required=True, help="interface the namespace serves")
     remove.set_defaults(func=cmd_remove, root=True)
