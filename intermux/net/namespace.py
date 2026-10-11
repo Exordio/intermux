@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from intermux.apps import processes
-from intermux.net import dns, interfaces, registry
+from intermux.net import dns, interfaces, registry, traffic
 from intermux.net.interfaces import Interface
 from intermux.system.shell import IP, IPTABLES, SYSCTL, run
 
@@ -98,6 +98,7 @@ class State:
     connection: str
     running: dict[str, list[int]] = field(default_factory=dict)
     """App path -> pids of its main processes."""
+    traffic: traffic.Counters | None = None
 
     @property
     def ns(self) -> Namespace:
@@ -166,7 +167,8 @@ def active() -> list[State]:
             if pids:
                 running[app.path] = pids
         entry.apps = [app for app in entry.apps if app.path in running]
-        result.append(State(entry, _connection(ns, all_interfaces.get(entry.interface)), running))
+        connection = _connection(ns, all_interfaces.get(entry.interface))
+        result.append(State(entry, connection, running, traffic.counters(ns.host_veth)))
     return result
 
 
@@ -188,9 +190,10 @@ def reconnect(ns: Namespace) -> bool:
     return True
 
 
-def reconnect_lost() -> list[str]:
+def reconnect_lost(states: list[State] | None = None) -> list[str]:
     """Reconnect every namespace whose interface came back. Returns their names."""
-    return [state.entry.namespace for state in active() if state.connection == NO_ROUTE and reconnect(state.ns)]
+    return [state.entry.namespace for state in (active() if states is None else states)
+            if state.connection == NO_ROUTE and reconnect(state.ns)]
 
 
 def teardown(ns: Namespace) -> None:

@@ -6,7 +6,7 @@ import os
 from intermux import log
 from intermux import binding
 from intermux.binding import BindError, OnRunning, bind
-from intermux.net import dns, interfaces, namespace
+from intermux.net import dns, interfaces, namespace, traffic
 from intermux.net.namespace import Namespace, State
 from intermux.system import deps
 from intermux.system.privileges import is_root
@@ -38,6 +38,9 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"  Subnet:    {entry.subnet}")
         print(f"  Route:     {entry.route}")
         print(f"  DNS:       {', '.join(entry.dns)}{' (auto)' if entry.dns_auto else ''}")
+        if state.traffic:
+            print(f"  Traffic:   down {traffic.format_bytes(state.traffic.down)}, "
+                  f"up {traffic.format_bytes(state.traffic.up)}")
         apps = (f"{os.path.basename(path)} (PID {', '.join(map(str, pids))})" for path, pids in state.running.items())
         print(f"  Apps:      {', '.join(apps) or '-'}")
     return 0

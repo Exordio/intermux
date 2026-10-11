@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -12,7 +13,7 @@ from intermux.binding import BindError, bind
 from intermux.gui import theme
 from intermux.gui.dialogs import ask_on_running
 from intermux.log import setup as setup_logging
-from intermux.net import dns, interfaces, namespace
+from intermux.net import dns, interfaces, namespace, traffic
 from intermux.net.namespace import Namespace, State
 from intermux.system import deps
 from intermux.system.privileges import is_root, reexec_as_root
@@ -25,7 +26,7 @@ log = logging.getLogger(__name__)
 NO_INTERFACES = "No active interfaces"
 AUTO_DNS = "Auto"
 DNS_CHOICES = [AUTO_DNS] + [f"{name}: {', '.join(servers)}" for name, servers in dns.PRESETS.items()]
-ACTIVE_REFRESH_MS = 5000
+ACTIVE_REFRESH_MS = 2000
 
 
 class App:
@@ -34,11 +35,12 @@ class App:
         self.user = user
         self.pending: list[tuple[str, str, list[str] | None]] = []
         self.states: list[State] = []
+        self.last_traffic: dict[str, tuple[float, traffic.Counters]] = {}
         # Held by background actions so that auto-reconnect does not rewire a namespace being removed.
         self.busy = threading.Lock()
 
         root.title("InterMux")
-        root.geometry("1020x790")
+        root.geometry("1140x790")
         theme.apply(root)
 
         main = ttk.Frame(root, padding=20)
@@ -75,13 +77,13 @@ class App:
 
         self.pending_table = self._section(
             main, "Pending: will be started on Assign",
-            {"App": 220, "Interface": 90, "Namespace": 195, "Subnet": 120, "DNS": 275}, height=4,
+            {"App": 260, "Interface": 100, "Namespace": 220, "Subnet": 130, "DNS": 330}, height=4,
             buttons=[[("Assign", self.assign), ("Clear", self.clear)]],
         )
         self.active_table = self._section(
             main, "Active: select a namespace or an app in it",
-            {"Status": 190, "Interface": 90, "Subnet": 115, "Route": 200, "DNS": 210}, height=8,
-            tree_column=("Namespace / App", 150),
+            {"Status": 150, "Interface": 90, "Route": 175, "DNS": 200, "Download": 155, "Upload": 155}, height=8,
+            tree_column=("Namespace / App", 135),
             buttons=[
                 [("Stop", lambda: self.stop(force=False)), ("Kill", lambda: self.stop(force=True)),
                  ("Restart", self.restart), ("Remove namespace", self.remove)],
@@ -120,20 +122,35 @@ class App:
         self.iface_box.set(current if current in names else names[0] if names else NO_INTERFACES)
         self.refresh_active()
 
-    def refresh_active(self) -> None:
+    def refresh_active(self, states: list[State] | None = None) -> None:
         selected = self.active_table.selection()
         self.active_table.delete(*self.active_table.get_children())
-        self.states = namespace.active()
+        self.states = namespace.active() if states is None else states
         for state in self.states:
             entry = state.entry
             dns_text = ", ".join(entry.dns) + (" (auto)" if entry.dns_auto else "")
+            down, up = self._traffic_text(entry.namespace, state.traffic)
             self.active_table.insert("", tk.END, iid=entry.namespace, text=entry.namespace, open=True, values=(
-                state.connection, entry.interface, entry.subnet, entry.route, dns_text))
+                state.connection, entry.interface, entry.route, dns_text, down, up))
             for path, pids in state.running.items():
                 self.active_table.insert(entry.namespace, tk.END, iid=f"{entry.namespace}|{path}",
                                          text=os.path.basename(path),
-                                         values=(f"PID {', '.join(map(str, pids))}", "", "", "", ""))
+                                         values=(f"PID {', '.join(map(str, pids))}",))
         self.active_table.selection_set([iid for iid in selected if self.active_table.exists(iid)])
+
+    def _traffic_text(self, name: str, counters: traffic.Counters | None) -> tuple[str, str]:
+        """Totals with the rate since the previous refresh."""
+        if counters is None:
+            return "-", "-"
+        now = time.monotonic()
+        previous_time, previous = self.last_traffic.get(name, (now, counters))
+        self.last_traffic[name] = (now, counters)
+        elapsed = now - previous_time
+        result = []
+        for total, before in ((counters.down, previous.down), (counters.up, previous.up)):
+            rate = (total - before) / elapsed if elapsed > 0 and total >= before else 0
+            result.append(f"{traffic.format_bytes(total)}, {traffic.format_bytes(rate)}/s")
+        return result[0], result[1]
 
     def _selection(self) -> tuple[State, str | None] | None:
         """Selected namespace state and app path (None when the namespace row itself is selected)."""
@@ -185,13 +202,17 @@ class App:
             self._in_background("Remove", lambda: binding.remove_namespace(selection[0]))
 
     def _schedule_active_refresh(self) -> None:
+        states = namespace.active()
         if self.busy.acquire(blocking=False):
             try:
-                for name in namespace.reconnect_lost():
-                    log.info("%s reconnected: its interface is back", name)
+                reconnected = namespace.reconnect_lost(states)
             finally:
                 self.busy.release()
-        self.refresh_active()
+            for name in reconnected:
+                log.info("%s reconnected: its interface is back", name)
+            if reconnected:
+                states = namespace.active()
+        self.refresh_active(states)
         self.root.after(ACTIVE_REFRESH_MS, self._schedule_active_refresh)
 
     def _dns_choice(self) -> list[str] | None:
