@@ -1,8 +1,0 @@
-Brotli==1.1.0
-click==8.2.1
-markdown2==2.5.3
-MarkupSafe==3.0.2
-minijinja==2.11.0
-page==0.3
-PyYAML==6.0.2
-tk==0.1.0

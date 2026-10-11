@@ -2,18 +2,18 @@
 
 Утилита для Linux, которая запускает приложение так, чтобы весь его сетевой трафик шёл через выбранный сетевой интерфейс. Например, браузер через Wi-Fi, а торрент-клиент через USB-модем или Ethernet.
 
-Это форк [Rishi-Bhati/intermux](https://github.com/Rishi-Bhati/intermux). Работает только под Linux, поддержка Windows в этом форке не планируется. Был проведен реверт для отмены поддержки винды. 
+Это форк [Rishi-Bhati/intermux](https://github.com/Rishi-Bhati/intermux). Работает только под Linux, поддержка Windows в этом форке не планируется. Был проведен реверт для отмены поддержки винды.
 
 ## Принцип работы
 
 Для каждого выбранного интерфейса InterMux создаёт отдельное сетевое пространство имён (network namespace) и запускает приложение внутри него:
 
-1. Создаётся namespace `ns_<hash>`, где `<hash>` — первые 8 символов MD5 от имени интерфейса.
-2. Пара veth (`veth0_<hash>` / `veth1_<hash>`) соединяет namespace с основной системой. Namespace получает подсеть `10.0.N.0/24`, где N вычисляется из того же хэша.
-3. На хосте включается `net.ipv4.ip_forward`, добавляется правило `MASQUERADE` для этой подсети на выбранный интерфейс и правило `FORWARD -j ACCEPT`.
-4. Policy routing: для подсети namespace создаётся отдельная таблица маршрутизации (201–453) с маршрутом по умолчанию через шлюз выбранного интерфейса и правило `ip rule from 10.0.N.0/24`. Без этого шага трафик уходил бы через основной маршрут системы.
-5. В `/etc/netns/ns_<hash>/resolv.conf` записываются реальные DNS-серверы. Заглушка `127.0.0.53` от `systemd-resolved` внутри namespace не работает, поэтому адреса берутся из `resolvectl dns` или `/etc/resolv.conf`.
-6. Приложение запускается через `ip netns exec ... sudo -u <пользователь>`, то есть от имени обычного пользователя, а не root. В окружение передаются `DISPLAY`/`WAYLAND_DISPLAY`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS`, сокеты PulseAudio/PipeWire и `HOME`, поэтому приложение видит ваш профиль, графическую сессию и звук.
+1. Создаётся namespace `ns_<hash>`, где `<hash>` — первые 8 символов MD5 от имени интерфейса. Все остальные имена и номера тоже выводятся из этого хэша, поэтому одному интерфейсу всегда соответствует один и тот же namespace.
+2. Пара veth (`veth0_<hash>` / `veth1_<hash>`) соединяет namespace с основной системой. Namespace получает подсеть `10.0.N.0/24`, хост — адрес `10.0.N.1`, namespace — `10.0.N.2`.
+3. На хосте включается `net.ipv4.ip_forward`, добавляются правило `MASQUERADE` для подсети на выбранный интерфейс и два правила `FORWARD`, разрешающие трафик только между этим veth и этим интерфейсом. Все правила помечены комментарием `intermux:ns_<hash>`.
+4. Policy routing: для пакетов, пришедших из veth namespace, создаётся отдельная таблица маршрутизации `200 + N` с маршрутом по умолчанию через шлюз выбранного интерфейса и правило `ip rule from 10.0.N.0/24 iif veth0_<hash>` с приоритетом `500 + N`. Без этого шага трафик уходил бы через основной маршрут системы.
+5. В `/etc/netns/ns_<hash>/resolv.conf` записываются реальные DNS-серверы. Локальные резолверы вроде `127.0.0.53` от `systemd-resolved` изнутри namespace недоступны, поэтому адреса берутся из `resolvectl dns` или `/etc/resolv.conf` без loopback-адресов.
+6. Приложение запускается через `ip netns exec ... sudo -u <пользователь>`, то есть от имени обычного пользователя, а не root. В окружение передаются `DISPLAY`/`WAYLAND_DISPLAY`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS`, сокеты PulseAudio/PipeWire и `HOME`, поэтому приложение видит ваш профиль, графическую сессию и звук. `TMPDIR` указывает на отдельный каталог в `/run/user/<uid>`, чтобы приложения в разных namespace не находили друг друга через IPC-сокеты.
 
 Права root нужны только для настройки сети (шаги 1–5).
 
@@ -21,7 +21,7 @@
 
 - Linux с поддержкой network namespaces (`CONFIG_NET_NS`, есть во всех распространённых дистрибутивах)
 - Python 3 с модулем `tkinter` (нужен только для GUI)
-- `iproute2`, `iptables`, `sudo`
+- `iproute2` с поддержкой `ip -j`, `iptables`, `sudo`
 - `pkexec` (polkit) — для повышения прав из GUI; без него используется `sudo`
 - `xhost` — для доступа GUI, запущенного от root, к X-серверу
 - X11 или Wayland с XWayland (интерфейс написан на Tk)
@@ -61,80 +61,76 @@ sudo zypper install python3 python3-tk iproute2 iptables sudo polkit xhost
 ```bash
 git clone https://github.com/Exordio/intermux.git
 cd intermux
-sudo python3 cli.py check
+python3 -m intermux check
 ```
 
 `check` показывает, каких системных утилит не хватает, и как их установить.
+
+Все команды запускаются из корня репозитория. Если вы используете venv, Python в нём должен быть собран с `tkinter`.
 
 ## Использование
 
 ### GUI
 
 ```bash
-python3 gui/app.py
+python3 -m intermux.gui
 ```
 
-Запускать можно от обычного пользователя: программа сама перезапустится с правами root через `pkexec` или, если его нет, через `sudo -E`.
+Запускать нужно от обычного пользователя: программа сама перезапустится с правами root через `pkexec` или, если его нет, через `sudo`.
 
 Порядок работы:
 
 1. Выберите интерфейс в списке. Виртуальные интерфейсы (`veth`, `docker`, `br-`, `tun`, `tap`, `virbr`, `vmnet`, `vboxnet`) скрыты, нажмите «Refresh», чтобы обновить список.
-2. Введите имя команды из `PATH` (например, `firefox`) или полный путь к исполняемому файлу и нажмите «Add».
+2. Введите имя команды из `PATH` (например, `firefox`) или полный путь к исполняемому файлу и нажмите «Add» или Enter.
 3. Нажмите «Assign», и все приложения из списка Pending будут запущены.
 
 Кнопки:
 
-- «Clear All» очищает списки и удаляет таблицы маршрутизации `*_rt`.
-- «Reset Everything» удаляет veth-интерфейсы, namespace, правила policy routing, таблицы 201–453 и правила `MASQUERADE`, созданные InterMux.
+- «Clear» очищает список Pending. Система при этом не меняется.
+- «Reset Everything» удаляет всё, что создал InterMux: namespace, veth, правила policy routing и их таблицы, правила `iptables` с комментарием `intermux:`, каталоги `/etc/netns/ns_*`.
 
 Если приложение уже запущено, будет предложено закрыть его и запустить заново через выбранный интерфейс, открыть второй экземпляр с отдельным профилем или отменить запуск.
 
-`gui/gui.py` — старое окно со списком интерфейсов. Кнопка «Create routing tables» в нём просто открывает `gui/app.py`.
-
 ### CLI
 
-Все команды CLI требуют root.
+`list` и `check` работают без root, `assign` и `reset` требуют root.
 
 ```bash
-# Список активных интерфейсов с IP-адресами и шлюзами
-sudo python3 cli.py list
+# Интерфейсы, которые можно выбрать, с адресами и шлюзами
+python3 -m intermux list
 
 # Запустить приложение через указанный интерфейс
-sudo python3 cli.py assign --app firefox --iface wlan0
+sudo python3 -m intermux assign --app firefox --iface wlan0
 
 # Проверить системные зависимости
-sudo python3 cli.py check
+python3 -m intermux check
 
-# Удалить таблицы маршрутизации *_rt из rt_tables
-sudo python3 cli.py clear
-
-# Удалить namespace, созданные для активных интерфейсов
-sudo python3 cli.py reset
+# Удалить всё, что создал InterMux (то же, что «Reset Everything» в GUI)
+sudo python3 -m intermux reset
 ```
 
 Если приложение уже запущено, `assign` спросит, что делать:
 
 ```
-[!] 'firefox' is already running (PID(s): [12345]).
-    Options:
-    1) Close current instance and reopen on the selected network (uses your default profile)
-    2) Open a new instance with a separate profile
-    3) Cancel
-    Enter choice [1/2/3]:
+firefox is already running (PID 12345).
+  1) Close it and start again on the selected network (default profile)
+  2) Start a second instance with a separate profile
+  3) Cancel
+Choice [1/2/3]:
 ```
 
 ## Firefox
 
 - Если Firefox не запущен или выбран вариант «закрыть и открыть заново», используется ваш основной профиль.
 - Если выбран второй экземпляр, создаётся отдельный постоянный профиль `~/.mozilla/firefox/intermux-<интерфейс>`. Закладки, cookie и расширения основного профиля в нём недоступны.
-- Вариант «закрыть и открыть заново» сначала отправляет `SIGTERM` всем процессам, в командной строке которых встречается имя приложения, а через 1,5 секунды — `SIGKILL`. Firefox может не успеть корректно завершиться, поэтому восстановление сессии не гарантируется.
+- Вариант «закрыть и открыть заново» отправляет `SIGTERM` вашим процессам с тем же именем, что у приложения, ждёт до 5 секунд и добивает оставшиеся через `SIGKILL`.
 
 ## Ограничения
 
 - **Одно приложение на интерфейс.** При каждом назначении namespace для интерфейса пересоздаётся. Приложение, запущенное через этот интерфейс ранее, теряет сеть.
 - **Только IPv4.** Переадресация и NAT настраиваются только для IPv4, в namespace нет IPv6.
-- **CLI не настраивает policy routing** (шаг 4 выше) и выбирает подсеть через `hash()`, который меняется между запусками. Через CLI надёжно работает только интерфейс, через который и так идёт основной маршрут системы. Для остальных используйте GUI.
-- **Сброс неполный.** Правило `iptables -A FORWARD -j ACCEPT` добавляется при каждом назначении и не удаляется ни одним из вариантов сброса; `net.ipv4.ip_forward` тоже остаётся включённым. `cli.py reset` не удаляет правила `iptables` и policy routing — для этого используйте «Reset Everything» в GUI. После перезагрузки namespace, маршруты и правила `iptables` исчезают, но записи в `rt_tables` и каталоги `/etc/netns/ns_*` остаются.
+- **Нужен шлюз.** Если у интерфейса нет шлюза в основной таблице маршрутизации, policy routing не настраивается и трафик namespace идёт по основному маршруту системы.
+- `net.ipv4.ip_forward` после сброса остаётся включённым: его могут использовать другие программы (Docker, libvirt).
 - **Chromium** запрещён в коде: по словам автора оригинального проекта, его песочница конфликтует с network namespaces. Другие браузеры на базе Chromium (Chrome, Brave и т. д.) не блокируются, но их работа не проверялась.
 - Namespace изолирует только сеть. Файлы, процессы и права пользователя остаются общими с системой, поэтому как средство безопасности это не годится.
 
@@ -142,36 +138,45 @@ sudo python3 cli.py reset
 
 ```
 intermux/
-├── cli.py                  # Консольный интерфейс
-├── core/
-│   ├── interface.py        # Обнаружение интерфейсов через ip
-│   ├── router.py           # Таблицы маршрутизации в rt_tables
-│   └── platform_utils.py   # Дистрибутив, пользователь, окружение сессии, DNS, зависимости
-├── gui/
-│   ├── app.py              # Основной GUI (Tk)
-│   └── gui.py              # Старое окно со списком интерфейсов
-├── release_notes.md
-└── license
+├── __main__.py         # python3 -m intermux → cli.main()
+├── cli.py              # Консольный интерфейс
+├── binding.py          # Общий для CLI и GUI сценарий: проверки, namespace, запуск
+├── log.py              # Настройка логирования
+├── system/
+│   ├── shell.py        # Запуск команд, пути к ip/iptables/sysctl
+│   ├── users.py        # Реальный пользователь за sudo/pkexec
+│   ├── session.py      # Окружение графической сессии, xhost
+│   ├── privileges.py   # Перезапуск с правами root
+│   └── deps.py         # Проверка системных зависимостей
+├── net/
+│   ├── interfaces.py   # Интерфейсы и шлюзы через ip -j
+│   ├── dns.py          # DNS-серверы для namespace
+│   └── namespace.py    # Создание, удаление и сброс namespace
+├── apps/
+│   ├── launcher.py     # Запуск приложения в namespace от имени пользователя
+│   ├── processes.py    # Поиск и остановка запущенных экземпляров
+│   └── firefox.py      # Флаги, профили и lock-файлы Firefox
+└── gui/
+    ├── __main__.py     # python3 -m intermux.gui
+    ├── app.py          # Главное окно
+    ├── dialogs.py      # Диалог «приложение уже запущено»
+    └── theme.py        # Цвета и стили Tk
 ```
 
 ## Настройка
 
-Номера таблиц маршрутизации для интерфейсов (`<iface>_rt`) задаются в `core/router.py`:
+Номера таблиц маршрутизации и приоритеты правил задаются в `intermux/net/namespace.py`:
 
 ```python
-BASE_TABLE_ID = 100   # номер первой таблицы
-BASE_PRIORITY = 1000  # приоритет ip rule = BASE_PRIORITY + номер таблицы
+TABLE_BASE = 200     # таблица namespace = TABLE_BASE + N (201–453)
+PRIORITY_BASE = 500  # приоритет ip rule = PRIORITY_BASE + N (501–753)
 ```
-
-Таблицы для подсетей namespace (`200 + N`) и их приоритеты (`500 + N`) заданы в `gui/app.py`, в функции `assign()`.
-
-Файл `rt_tables` ищется в `/etc/iproute2/rt_tables`, затем в `/usr/share/iproute2/rt_tables`.
 
 ## Диагностика
 
-GUI ведёт подробный лог (уровень DEBUG, со стектрейсами) в `~/.local/share/intermux/intermux.log` того пользователя, от имени которого работает процесс. После повышения прав это обычно root, то есть `/root/.local/share/intermux/intermux.log`. CLI пишет только в консоль.
+CLI и GUI пишут подробный лог (уровень DEBUG, все выполненные команды, стектрейсы) в `~/.local/share/intermux/intermux.log` того пользователя, от имени которого работает процесс. После повышения прав это обычно root, то есть `/root/.local/share/intermux/intermux.log`.
 
-Если интерфейс не отображается, проверьте, что он поднят и у него есть IP-адрес:
+Если интерфейс не отображается, проверьте, что он поднят и у него есть IPv4-адрес:
 
 ```bash
 ip addr show
@@ -181,14 +186,16 @@ sudo ip link set <интерфейс> up
 Если в приложении нет интернета:
 
 ```bash
-sudo python3 cli.py check
+python3 -m intermux check
 sysctl net.ipv4.ip_forward               # должно быть 1
-sudo iptables -t nat -S POSTROUTING      # должно быть правило MASQUERADE для 10.0.N.0/24
-ip rule show                             # должно быть правило from 10.0.N.0/24
+sudo iptables -t nat -S POSTROUTING      # правило MASQUERADE для 10.0.N.0/24
+ip rule show                             # правило from 10.0.N.0/24 iif veth0_<hash>
 sudo ip netns exec ns_<hash> ping -c1 1.1.1.1
 ```
 
 Если GUI не запускается на Wayland, проверьте, что установлен XWayland (`xorg-xwayland` в Arch, `xwayland` в Debian/Ubuntu).
+
+Ранние версии InterMux регистрировали в `rt_tables` таблицы `<интерфейс>_rt`. Они не влияли на трафик namespace и больше не создаются. `reset` удаляет их вместе со связанными правилами.
 
 ## Лицензия
 
