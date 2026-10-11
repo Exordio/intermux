@@ -1,36 +1,40 @@
 # InterMux
 
-Утилита для Linux, которая запускает приложение так, чтобы весь его сетевой трафик шёл через выбранный сетевой интерфейс. Например: браузер - через Wi-Fi, торрент через USB-модем или Ethernet, что-то ещё - через VPN.
+English | [Русский](README.RU.md)
 
-Это форк [Rishi-Bhati/intermux](https://github.com/Rishi-Bhati/intermux). Работает только под Linux, поддержка Windows в этом форке не планируется. Был проведен реверт для отмены поддержки винды.
+A Linux tool that runs an application so that all of its network traffic goes through an interface you choose. For example: a browser through Wi-Fi, a torrent client through a USB modem or Ethernet, something else through a VPN.
 
-## Принцип работы
+This is a fork of [Rishi-Bhati/intermux](https://github.com/Rishi-Bhati/intermux). It runs on Linux only; Windows support is not planned in this fork and was removed by reverting the upstream commits that added it.
 
-Для каждого выбранного интерфейса InterMux создаёт отдельное сетевое пространство имён (network namespace) и запускает приложение внутри него:
+![InterMux window](https://i.imgur.com/MPeYAyd.png)
 
-1. Создаётся namespace `ns_<hash>`, где `<hash>` — первые 8 символов MD5 от имени интерфейса. Остальные имена и номера тоже выводятся из этого хэша. Если имя или подсеть уже заняты (например, namespace перенесли на другой интерфейс), хэш считается от `<интерфейс>#1`, `#2` и т. д. Если namespace для интерфейса уже есть, он используется повторно: шаги 1–2 пропускаются, шаги 3–5 выполняются заново, а запущенные в нём приложения не теряют сеть.
-2. Пара veth (`veth0_<hash>` / `veth1_<hash>`) соединяет namespace с основной системой. Namespace получает подсеть `10.0.N.0/24`, хост — адрес `10.0.N.1`, namespace — `10.0.N.2`.
-3. На хосте включается `net.ipv4.ip_forward`, добавляются правило `MASQUERADE` для подсети на выбранный интерфейс и два правила `FORWARD`, разрешающие трафик только между этим veth и этим интерфейсом. Все правила помечены комментарием `intermux:ns_<hash>`.
-4. Policy routing: для пакетов, пришедших из veth namespace, создаётся отдельная таблица маршрутизации `200 + N` с маршрутом по умолчанию через выбранный интерфейс и правило `ip rule from 10.0.N.0/24 iif veth0_<hash>` с приоритетом `500 + N`. Без этого шага трафик уходил бы через основной маршрут системы. Если у интерфейса есть шлюз, маршрут идёт через него (`via <шлюз>`); у point-to-point интерфейсов без шлюза (WireGuard, часть OpenVPN, PPP) — просто в интерфейс (`dev <интерфейс>`). В той же таблице всегда есть запасной маршрут `unreachable default` с метрикой 4096: если интерфейс пропадёт (VPN отключился, Wi-Fi потерян), ядро удалит его маршрут, и трафик namespace упрётся в запасной маршрут, а не уйдёт через основной маршрут системы.
-5. В `/etc/netns/ns_<hash>/resolv.conf` записываются DNS-серверы namespace: выбранные вами или подобранные автоматически (см. раздел [DNS](#dns)).
-6. Приложение запускается через `ip netns exec ... sudo -u <пользователь>`, то есть от имени обычного пользователя, а не root. В окружение передаются `DISPLAY`/`WAYLAND_DISPLAY`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS`, сокеты PulseAudio/PipeWire и `HOME`, поэтому приложение видит ваш профиль, графическую сессию и звук. `TMPDIR` указывает на отдельный каталог в `/run/user/<uid>`, чтобы приложения в разных namespace не находили друг друга через IPC-сокеты.
+## How it works
 
-Права root нужны только для настройки сети (шаги 1–5).
+For every interface you pick, InterMux creates a separate network namespace and starts the application inside it:
 
-Что обслуживает каждый namespace (интерфейс, маршрут, DNS, запущенные приложения), записывается в `/run/intermux/ns_<hash>.json`. Как и сами namespace, эти файлы исчезают после перезагрузки.
+1. A namespace `ns_<hash>` is created, where `<hash>` is the first 8 characters of the MD5 of the interface name. All other names and numbers are derived from the same hash. If the name or the subnet is already taken (for example, a namespace was moved to another interface), the hash of `<interface>#1`, `#2` and so on is used instead. If a namespace for the interface already exists, it is reused: steps 1–2 are skipped, steps 3–5 are done again, and apps already running in it keep their network.
+2. A veth pair (`veth0_<hash>` / `veth1_<hash>`) connects the namespace to the host. The namespace gets the subnet `10.0.N.0/24`, the host end gets `10.0.N.1`, the namespace end `10.0.N.2`.
+3. On the host, `net.ipv4.ip_forward` is enabled, a `MASQUERADE` rule for the subnet on the selected interface is added, together with two `FORWARD` rules that allow traffic only between this veth and this interface. All rules carry the comment `intermux:ns_<hash>`.
+4. Policy routing: packets coming from the namespace veth get their own routing table `200 + N` with a default route through the selected interface, selected by the rule `ip rule from 10.0.N.0/24 iif veth0_<hash>` with priority `500 + N`. Without it the traffic would leave through the host's default route. If the interface has a gateway, the route goes through it (`via <gateway>`); point-to-point interfaces without a gateway (WireGuard, some OpenVPN setups, PPP) get a route straight into the interface (`dev <interface>`). The same table always holds a fallback `unreachable default` route with metric 4096: if the interface goes away (VPN disconnected, Wi-Fi lost), the kernel removes its route and the namespace traffic hits the fallback instead of leaving through the host's default route.
+5. The namespace DNS servers are written to `/etc/netns/ns_<hash>/resolv.conf`: the ones you chose or picked automatically (see [DNS](#dns)).
+6. The application is started with `ip netns exec ... sudo -u <user>`, that is as your regular user, not as root. `DISPLAY`/`WAYLAND_DISPLAY`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS`, the PulseAudio/PipeWire sockets and `HOME` are passed along, so the app sees your profile, your graphical session and your audio. `TMPDIR` points to a separate directory under `/run/user/<uid>`, so apps in different namespaces do not find each other through IPC sockets.
 
-## Требования
+Root is needed only for the network setup (steps 1–5).
 
-- Linux с поддержкой network namespaces (`CONFIG_NET_NS`, есть во всех распространённых дистрибутивах)
-- Python 3 с модулем `tkinter` (нужен только для GUI)
-- `iproute2` с поддержкой `ip -j` (включая `tc`), `iptables`, `sudo`
-- `pkexec` (polkit) — для повышения прав из GUI; без него используется `sudo`
-- `xhost` — для доступа GUI, запущенного от root, к X-серверу
-- X11 или Wayland с XWayland (интерфейс написан на Tk)
+What each namespace serves (interface, route, DNS, running apps) is recorded in `/run/intermux/ns_<hash>.json`. Like the namespaces themselves, these files are gone after a reboot.
 
-Сторонние Python-пакеты не нужны: код использует только стандартную библиотеку.
+## Requirements
 
-### Установка зависимостей
+- Linux with network namespace support (`CONFIG_NET_NS`, enabled in all common distributions)
+- Python 3 with the `tkinter` module (only for the GUI)
+- `iproute2` with `ip -j` support (including `tc`), `iptables`, `sudo`
+- `pkexec` (polkit) to elevate the GUI; `sudo` is used without it
+- `xhost` so that the GUI running as root can access the X server
+- X11, or Wayland with XWayland (the interface is built with Tk)
+
+No third-party Python packages are needed: the code uses only the standard library.
+
+### Installing dependencies
 
 Debian / Ubuntu / Mint:
 
@@ -38,7 +42,7 @@ Debian / Ubuntu / Mint:
 sudo apt install python3 python3-tk iproute2 iptables sudo pkexec x11-xserver-utils
 ```
 
-На старых версиях Debian/Ubuntu вместо `pkexec` используйте пакет `policykit-1`.
+On older Debian/Ubuntu releases use the `policykit-1` package instead of `pkexec`.
 
 Arch / Manjaro / EndeavourOS:
 
@@ -58,7 +62,7 @@ openSUSE:
 sudo zypper install python3 python3-tk iproute2 iptables sudo polkit xhost
 ```
 
-### Получение исходников
+### Getting the source
 
 ```bash
 git clone https://github.com/Exordio/intermux.git
@@ -66,11 +70,11 @@ cd intermux
 python3 -m intermux check
 ```
 
-`check` показывает, каких системных утилит не хватает, и как их установить.
+`check` lists missing system tools and how to install them.
 
-Все команды запускаются из корня репозитория. Если вы используете venv, Python в нём должен быть собран с `tkinter`.
+All commands are run from the repository root. If you use a venv, its Python must be built with `tkinter`.
 
-## Использование
+## Usage
 
 ### GUI
 
@@ -78,85 +82,85 @@ python3 -m intermux check
 python3 -m intermux.gui
 ```
 
-Запускать нужно от обычного пользователя: программа сама перезапустится с правами root через `pkexec` или, если его нет, через `sudo`.
+Start it as a regular user: it restarts itself as root through `pkexec`, or through `sudo` if `pkexec` is missing.
 
-Порядок работы:
+Workflow:
 
-1. Выберите интерфейс в списке. В нём только поднятые интерфейсы с IPv4-адресом. «Refresh» обновляет список.
-2. Введите имя команды из `PATH` (например, `firefox`) или полный путь к исполняемому файлу.
-3. Выберите DNS: `Auto`, один из пресетов (Cloudflare, Google, Quad9) или впишите свои серверы через запятую. Нажмите «Add» или Enter.
-4. Нажмите «Assign», и все приложения из таблицы Pending будут запущены.
+1. Pick an interface. The list contains only interfaces that are up and have an IPv4 address. "Refresh" updates it.
+2. Enter a command name from `PATH` (for example, `firefox`) or the full path to an executable.
+3. Choose DNS: `Auto`, one of the presets (Cloudflare, Google, Quad9), or type your own servers separated by commas. Press "Add" or Enter.
+4. Press "Assign" to start every application in the Pending table.
 
-Таблица Pending показывает, что произойдёт при запуске: какой namespace будет обслуживать приложение и с какой подсетью, создан ли он уже (`existing`) или будет создан (`new`), какие DNS он получит.
+The Pending table shows what will happen on start: which namespace will serve the app and its subnet, whether the namespace already exists (`existing`) or will be created (`new`), and which DNS servers it will get.
 
-Таблица Active показывает существующие namespace: состояние соединения, интерфейс, маршрут, DNS (с пометкой `auto`, если подобраны автоматически) трафик — сколько скачано и отдано с момента создания namespace и текущую скорость, и ограничение скорости. Под каждым namespace перечислены запущенные в нём приложения с PID. Таблица обновляется каждые 2 секунды.
+The Active table shows the existing namespaces: connection state, interface, route, DNS (marked `auto` when picked automatically), traffic (downloaded and uploaded since the namespace was created, and the current rate) and the bandwidth limit. The apps running in each namespace are listed under it with their PIDs. The table refreshes every 2 seconds.
 
-Трафик считается по счётчикам хостового конца пары veth (`ip -s link`), через который проходит всё, что отправляет и получает namespace. Это трафик всех приложений namespace вместе: по отдельным приложениям он не делится.
+Traffic is read from the counters of the host end of the veth pair (`ip -s link`), which everything the namespace sends or receives passes through. It is the traffic of all apps in the namespace together and is not split per app.
 
-Состояние соединения:
+Connection states:
 
-- `connected` — трафик идёт через интерфейс.
-- `interface down`, `interface missing` — интерфейс выключен или исчез. У приложений в namespace нет сети, в обход интерфейса трафик не идёт.
-- `no route` — интерфейс есть, но маршрута через него в таблице namespace нет. Так бывает, когда интерфейс вернулся после отключения. Пока GUI открыт, такие namespace переподключаются автоматически при очередном обновлении таблицы. Без GUI это делает `reconnect`.
+- `connected` — traffic goes through the interface.
+- `interface down`, `interface missing` — the interface is down or gone. Apps in the namespace have no network; traffic does not go around the interface.
+- `no route` — the interface exists, but the namespace table has no route through it. This happens when the interface comes back after a disconnect. While the GUI is open, such namespaces are reconnected automatically on the next refresh. Without the GUI, use `reconnect`.
 
-Кнопки:
+Buttons:
 
-- «Clear» очищает таблицу Pending. Система при этом не меняется.
-- «Stop» останавливает выбранное приложение: `SIGTERM`, через 5 секунд `SIGKILL` для того, что не завершилось, и затем `SIGKILL` для оставшихся дочерних процессов. Если выбран сам namespace, останавливается всё, что в нём работает, в том числе процессы, запущенные не через InterMux.
-- «Kill» делает то же самое, но сразу `SIGKILL`.
-- «Restart» останавливает приложение и запускает его снова в том же namespace с теми же параметрами (например, с отдельным профилем Firefox). Для namespace перезапускаются все его приложения.
-- «Remove namespace» останавливает всё в namespace и удаляет его вместе с правилами и маршрутами.
-- «Move to interface» направляет выбранный namespace через интерфейс, выбранный вверху окна. Приложения продолжают работать, их открытые соединения обрываются и устанавливаются заново уже через новый интерфейс. DNS в режиме Auto подбираются для нового интерфейса, заданные вручную сохраняются.
-- «Set DNS» применяет значение из поля DNS к выбранному namespace.
-- «Set limit» ограничивает скорость выбранного namespace значениями из полей down и up (Мбит/с). Пустое поле снимает ограничение.
-- «Reset Everything» удаляет всё, что создал InterMux: namespace, veth, правила policy routing и их таблицы, правила `iptables` с комментарием `intermux:`, каталоги `/etc/netns/ns_*` и `/run/intermux`.
+- "Clear" empties the Pending table. Nothing on the system changes.
+- "Stop" stops the selected app: `SIGTERM`, then `SIGKILL` after 5 seconds for whatever did not exit, then `SIGKILL` for child processes left behind. With a namespace selected, everything running in it is stopped, including processes not started through InterMux.
+- "Kill" does the same with `SIGKILL` right away.
+- "Restart" stops the app and starts it again in the same namespace with the same options (for example, a separate Firefox profile). With a namespace selected, all its apps are restarted.
+- "Remove namespace" stops everything in the namespace and removes it together with its rules and routes.
+- "Move to interface" routes the selected namespace through the interface selected at the top of the window. Apps keep running; their open connections break and are re-established through the new interface. Auto DNS is picked again for the new interface, DNS set by hand is kept.
+- "Set DNS" applies the value of the DNS field to the selected namespace.
+- "Set limit" limits the bandwidth of the selected namespace to the values in the down and up fields (Mbit/s). An empty field removes the limit.
+- "Reset Everything" removes everything InterMux created: namespaces, veth pairs, policy routing rules and their tables, `iptables` rules with the `intermux:` comment, the `/etc/netns/ns_*` directories and `/run/intermux`.
 
-Если приложение уже запущено, будет предложено закрыть его и запустить заново через выбранный интерфейс, открыть второй экземпляр с отдельным профилем или отменить запуск.
+If the app is already running, you are asked whether to close it and start it again through the selected interface, open a second instance with a separate profile, or cancel.
 
 ### CLI
 
-`list`, `check` и `status` работают без root, остальные команды требуют root.
+`list`, `check` and `status` work without root; the other commands need root.
 
 ```bash
-# Интерфейсы, которые можно выбрать, с адресами и шлюзами
+# Interfaces that can be used, with addresses and gateways
 python3 -m intermux list
 
-# Запустить приложение через указанный интерфейс
+# Start an application through an interface
 sudo python3 -m intermux assign --app firefox --iface wlan0
 
-# То же со своими DNS-серверами
+# The same with your own DNS servers
 sudo python3 -m intermux assign --app firefox --iface wlan0 --dns 9.9.9.9,149.112.112.112
 
-# Существующие namespace: состояние, интерфейс, подсеть, маршрут, DNS, трафик, запущенные приложения с PID
+# Existing namespaces: state, interface, subnet, route, DNS, traffic, running apps with PIDs
 python3 -m intermux status
 
-# Ограничить скорость namespace интерфейса wlan0, Мбит/с (без --down и --up — снять ограничения)
+# Limit the bandwidth of the wlan0 namespace, Mbit/s (without --down and --up the limits are removed)
 sudo python3 -m intermux limit --iface wlan0 --down 20 --up 5
 
-# Перевести namespace интерфейса wlan0 на tun0, не останавливая приложения
+# Move the wlan0 namespace to tun0 without stopping its apps
 sudo python3 -m intermux move --iface wlan0 --to tun0
 
-# Остановить приложение (--kill — сразу SIGKILL), перезапустить его в том же namespace
+# Stop an app (--kill sends SIGKILL right away), restart it in the same namespace
 sudo python3 -m intermux stop firefox
 sudo python3 -m intermux restart firefox --iface wlan0
 
-# Остановить всё в namespace интерфейса wlan0 и удалить его
+# Stop everything in the wlan0 namespace and remove it
 sudo python3 -m intermux remove --iface wlan0
 
-# Сменить DNS namespace интерфейса wlan0 (или вернуть автоматический выбор: auto)
+# Change DNS of the wlan0 namespace (or go back to automatic selection: auto)
 sudo python3 -m intermux dns --iface wlan0 1.1.1.1,1.0.0.1
 
-# Проверить системные зависимости
+# Check system dependencies
 python3 -m intermux check
 
-# Переподключить namespace, интерфейс которых снова доступен (например, после переподключения VPN)
+# Reconnect namespaces whose interface is available again (for example, after a VPN reconnect)
 sudo python3 -m intermux reconnect
 
-# Удалить всё, что создал InterMux (то же, что «Reset Everything» в GUI)
+# Remove everything InterMux created (same as "Reset Everything" in the GUI)
 sudo python3 -m intermux reset
 ```
 
-Если приложение уже запущено, `assign` спросит, что делать:
+If the app is already running, `assign` asks what to do:
 
 ```
 firefox is already running (PID 12345).
@@ -168,122 +172,122 @@ Choice [1/2/3]:
 
 ### DNS
 
-DNS задаётся на весь namespace, то есть для всех приложений, запущенных через один интерфейс.
+DNS is set per namespace, that is for all apps started through one interface.
 
-- **Auto.** Берутся DNS-серверы самого интерфейса из `resolvectl dns <интерфейс>`. Если их нет (например, без `systemd-resolved`), используются системные из `resolvectl dns` или `/etc/resolv.conf`, но без серверов из локальных сетей других интерфейсов: роутер Wi-Fi недоступен из namespace, трафик которого идёт через VPN. Если не осталось ни одного сервера, используются `1.1.1.1` и `8.8.8.8`.
-- **Пресет или свой список.** Только IPv4-адреса через запятую или пробел.
+- **Auto.** The interface's own DNS servers from `resolvectl dns <interface>` are used. If there are none (for example, without `systemd-resolved`), the system ones from `resolvectl dns` or `/etc/resolv.conf` are used, except servers in the local networks of other interfaces: the Wi-Fi router is unreachable from a namespace whose traffic goes through a VPN. If no server is left, `1.1.1.1` and `8.8.8.8` are used.
+- **A preset or your own list.** IPv4 addresses only, separated by commas or spaces.
 
-Локальные резолверы (`127.0.0.53` от `systemd-resolved`, dnsmasq и т. п.) изнутри namespace недоступны, link-local и IPv6-адреса тоже не используются.
+Local resolvers (`127.0.0.53` of `systemd-resolved`, dnsmasq and the like) are unreachable from inside a namespace; link-local and IPv6 addresses are not used either.
 
-Если при назначении приложения на существующий namespace выбран `Auto` (или в CLI не указан `--dns`), его DNS не меняются. Явно указанные серверы заменяют текущие.
+When an app is assigned to an existing namespace with `Auto` (or without `--dns` in the CLI), its DNS stays as it is. Servers given explicitly replace the current ones.
 
-`resolv.conf` перезаписывается на месте, поэтому смена DNS действует и на уже запущенные приложения. Приложения со своим кэшем или DNS-over-HTTPS (например, Firefox с включённым DoH) могут продолжать использовать старые адреса или вообще не обращаться к этим серверам.
+`resolv.conf` is rewritten in place, so a DNS change also applies to apps that are already running. Apps with their own cache or DNS-over-HTTPS (for example, Firefox with DoH enabled) may keep using the old servers or not use these servers at all.
 
-### Ограничение скорости
+### Bandwidth limits
 
-Ограничение действует на весь namespace, то есть на все приложения, запущенные через один интерфейс. Скачивание ограничивается на хостовом конце пары veth, отдача — на конце внутри namespace (`tc qdisc ... tbf`). Ограничение сохраняется при назначении новых приложений на тот же интерфейс и пропадает вместе с namespace.
+A limit applies to the whole namespace, that is to all apps started through one interface. Download is limited on the host end of the veth pair, upload on the end inside the namespace (`tc qdisc ... tbf`). The limit is kept when new apps are assigned to the same interface and disappears together with the namespace.
 
-### Какие интерфейсы доступны
+### Which interfaces are available
 
-Скрываются интерфейсы, через которые нельзя выйти за пределы машины:
+Interfaces that cannot lead outside the machine are hidden:
 
-- `veth*` — пары veth, в том числе созданные самим InterMux. Направить через них приложение означало бы зациклить трафик.
-- `docker*`, `br-*`, `virbr*`, `vboxnet*`, `vmnet*` — мосты Docker, libvirt, VirtualBox и VMware. Они соединяют хост с контейнерами и виртуальными машинами, внешнего маршрута у них нет.
+- `veth*` — veth pairs, including the ones InterMux creates. Routing an app through them would loop the traffic.
+- `docker*`, `br-*`, `virbr*`, `vboxnet*`, `vmnet*` — Docker, libvirt, VirtualBox and VMware bridges. They connect the host to containers and virtual machines and have no route outside.
 
-Фильтр работает по префиксу имени, тот же список использует `list` в CLI. Чтобы скрыть или показать другие интерфейсы, измените `VIRTUAL_PREFIXES` в `intermux/net/interfaces.py`.
+The filter works by name prefix; `list` in the CLI uses the same list. To hide or show other interfaces, edit `VIRTUAL_PREFIXES` in `intermux/net/interfaces.py`.
 
 ### VPN
 
-Интерфейсы `tun*`, `tap*`, `wg*` и `ppp*` показываются с типом VPN, через них можно направить отдельное приложение, не включая VPN для всей системы. Не важно, идёт ли через VPN маршрут по умолчанию самой системы.
+`tun*`, `tap*`, `wg*` and `ppp*` interfaces are shown with the VPN type. You can route a single app through them without turning on the VPN for the whole system. It does not matter whether the system's own default route goes through the VPN.
 
-Если VPN-клиент ставит маршрут через шлюз (`default via 10.8.0.1 dev tun0`), используется этот шлюз. У WireGuard и других point-to-point интерфейсов шлюза нет, тогда маршрут в таблице namespace ставится прямо в интерфейс.
+If the VPN client sets a route through a gateway (`default via 10.8.0.1 dev tun0`), that gateway is used. WireGuard and other point-to-point interfaces have no gateway; the route in the namespace table then goes straight into the interface.
 
 ## Firefox
 
-- Если Firefox не запущен или выбран вариант «закрыть и открыть заново», используется ваш основной профиль.
-- Если выбран второй экземпляр, создаётся отдельный постоянный профиль `~/.mozilla/firefox/intermux-<интерфейс>`. Закладки, cookie и расширения основного профиля в нём недоступны.
-- Вариант «закрыть и открыть заново» отправляет `SIGTERM` вашим процессам с тем же именем, что у приложения или у файла, на который указывает его символическая ссылка (без учёта регистра), ждёт до 5 секунд и добивает оставшиеся через `SIGKILL`.
+- If Firefox is not running, or you chose "close and reopen", your default profile is used.
+- If you chose a second instance, a separate persistent profile `~/.mozilla/firefox/intermux-<interface>` is created. Bookmarks, cookies and extensions of the default profile are not available in it.
+- "Close and reopen" sends `SIGTERM` to your processes named like the app or like the file its symlink points to (case-insensitive), waits up to 5 seconds and kills what is left with `SIGKILL`.
 
-## Ограничения
+## Limitations
 
-- **Только IPv4.** Переадресация и NAT настраиваются только для IPv4, в namespace нет IPv6.
-- **Нужен шлюз или point-to-point интерфейс.** Если у обычного интерфейса (Ethernet, Wi-Fi) нет шлюза в основной таблице маршрутизации, у namespace нет сети (состояние `no route`).
-- **Перенос на другой интерфейс и `conntrack`.** Чтобы открытые UDP-потоки не продолжали идти с адресом старого интерфейса, при переносе сбрасываются записи conntrack подсети namespace. Для этого нужна утилита `conntrack` (пакет `conntrack-tools` в Arch и Fedora, `conntrack` в Debian/Ubuntu). Без неё такие потоки восстанавливаются только после истечения записей conntrack.
-- **Один набор DNS на интерфейс.** Все приложения, запущенные через один интерфейс, работают в одном namespace и используют одни и те же DNS-серверы.
-- `net.ipv4.ip_forward` после сброса остаётся включённым: его могут использовать другие программы (Docker, libvirt).
-- **Chromium** запрещён в коде: по словам автора оригинального проекта, его песочница конфликтует с network namespaces. Другие браузеры на базе Chromium (Chrome, Brave и т. д.) не блокируются, но их работа не проверялась.
-- **VPN с kill switch** (правила `iptables`/`nftables`, запрещающие трафик мимо туннеля) может блокировать трафик namespace через другие интерфейсы. Это настройка VPN-клиента, InterMux её не меняет.
-- Namespace изолирует только сеть. Файлы, процессы и права пользователя остаются общими с системой, поэтому как средство безопасности это не годится.
+- **IPv4 only.** Forwarding and NAT are set up for IPv4 only; there is no IPv6 in the namespace.
+- **A gateway or a point-to-point interface is required.** If a regular interface (Ethernet, Wi-Fi) has no gateway in the main routing table, the namespace has no network (state `no route`).
+- **Moving to another interface and `conntrack`.** So that open UDP flows do not keep using the old interface's address, conntrack entries of the namespace subnet are dropped on a move. This needs the `conntrack` tool (package `conntrack-tools` on Arch and Fedora, `conntrack` on Debian/Ubuntu). Without it such flows recover only when their conntrack entries expire.
+- **One set of DNS servers per interface.** All apps started through one interface run in one namespace and use the same DNS servers.
+- `net.ipv4.ip_forward` stays enabled after a reset: other software (Docker, libvirt) may rely on it.
+- **Chromium** is blocked in the code: according to the original author, its sandbox conflicts with network namespaces. Other Chromium-based browsers (Chrome, Brave and so on) are not blocked, but have not been tested.
+- **A VPN with a kill switch** (`iptables`/`nftables` rules that block traffic outside the tunnel) may block namespace traffic through other interfaces. This is a setting of the VPN client; InterMux does not change it.
+- A namespace isolates only the network. Files, processes and user permissions are shared with the system, so it is not a security boundary.
 
-## Структура проекта
+## Project layout
 
 ```
 intermux/
 ├── __main__.py         # python3 -m intermux → cli.main()
-├── cli.py              # Консольный интерфейс
-├── binding.py          # Общий для CLI и GUI сценарий: проверки, namespace, запуск
-├── log.py              # Настройка логирования
+├── cli.py              # Command line interface
+├── binding.py          # Flows shared by CLI and GUI: checks, namespace, launch, app control
+├── log.py              # Logging setup
 ├── system/
-│   ├── shell.py        # Запуск команд, пути к ip/iptables/sysctl
-│   ├── users.py        # Реальный пользователь за sudo/pkexec
-│   ├── session.py      # Окружение графической сессии, xhost
-│   ├── privileges.py   # Перезапуск с правами root
-│   └── deps.py         # Проверка системных зависимостей
+│   ├── shell.py        # Running commands, paths to ip/iptables/sysctl
+│   ├── users.py        # The real user behind sudo/pkexec
+│   ├── session.py      # Graphical session environment, xhost
+│   ├── privileges.py   # Restarting as root
+│   └── deps.py         # System dependency check
 ├── net/
-│   ├── interfaces.py   # Интерфейсы и шлюзы через ip -j
-│   ├── dns.py          # DNS-серверы для namespace: автоподбор, пресеты, разбор ввода
-│   ├── namespace.py    # Создание, повторное использование, удаление и сброс namespace
-│   ├── registry.py     # Что обслуживает каждый namespace (/run/intermux)
-│   ├── shaping.py      # Ограничение скорости через tc
-│   └── traffic.py      # Счётчики трафика namespace
+│   ├── interfaces.py   # Interfaces and gateways via ip -j
+│   ├── dns.py          # DNS servers for namespaces: auto selection, presets, input parsing
+│   ├── namespace.py    # Creating, reusing, moving, removing and resetting namespaces
+│   ├── registry.py     # What each namespace serves (/run/intermux)
+│   ├── shaping.py      # Bandwidth limits with tc
+│   └── traffic.py      # Namespace traffic counters
 ├── apps/
-│   ├── launcher.py     # Запуск приложения в namespace от имени пользователя
-│   ├── processes.py    # Поиск и остановка запущенных экземпляров, процессы в namespace
-│   └── firefox.py      # Флаги, профили и lock-файлы Firefox
+│   ├── launcher.py     # Starting an app in a namespace as the user
+│   ├── processes.py    # Finding and stopping running instances, processes of a namespace
+│   └── firefox.py      # Firefox flags, profiles and lock files
 └── gui/
     ├── __main__.py     # python3 -m intermux.gui
-    ├── app.py          # Главное окно
-    ├── dialogs.py      # Диалог «приложение уже запущено»
-    └── theme.py        # Цвета и стили Tk
+    ├── app.py          # Main window
+    ├── dialogs.py      # "Application is running" dialog
+    └── theme.py        # Tk colors and styles
 ```
 
-## Настройка
+## Configuration
 
-Номера таблиц маршрутизации и приоритеты правил задаются в `intermux/net/namespace.py`:
+Routing table numbers and rule priorities are set in `intermux/net/namespace.py`:
 
 ```python
-TABLE_BASE = 200     # таблица namespace = TABLE_BASE + N (201–453)
-PRIORITY_BASE = 500  # приоритет ip rule = PRIORITY_BASE + N (501–753)
+TABLE_BASE = 200     # namespace table = TABLE_BASE + N (201–453)
+PRIORITY_BASE = 500  # ip rule priority = PRIORITY_BASE + N (501–753)
 ```
 
-## Диагностика
+## Troubleshooting
 
-CLI и GUI пишут подробный лог (уровень DEBUG, все выполненные команды, стектрейсы) в `~/.local/share/intermux/intermux.log` того пользователя, от имени которого работает процесс. После повышения прав это обычно root, то есть `/root/.local/share/intermux/intermux.log`.
+The CLI and the GUI write a detailed log (DEBUG level, every executed command, stack traces) to `~/.local/share/intermux/intermux.log` of the user the process runs as. After elevation this is usually root, so `/root/.local/share/intermux/intermux.log`.
 
-Если интерфейс не отображается, проверьте, что он поднят и у него есть IPv4-адрес:
+If an interface is not listed, check that it is up and has an IPv4 address:
 
 ```bash
 ip addr show
-sudo ip link set <интерфейс> up
+sudo ip link set <interface> up
 ```
 
-Если в приложении нет интернета:
+If an app has no internet access:
 
 ```bash
 python3 -m intermux check
-python3 -m intermux status               # состояние, интерфейс, маршрут и DNS namespace
-ip route show table <200 + N>            # маршрут через интерфейс и запасной unreachable
-sysctl net.ipv4.ip_forward               # должно быть 1
-sudo iptables -t nat -S POSTROUTING      # правило MASQUERADE для 10.0.N.0/24
-ip rule show                             # правило from 10.0.N.0/24 iif veth0_<hash>
+python3 -m intermux status               # namespace state, interface, route and DNS
+ip route show table <200 + N>            # route through the interface and the unreachable fallback
+sysctl net.ipv4.ip_forward               # must be 1
+sudo iptables -t nat -S POSTROUTING      # MASQUERADE rule for 10.0.N.0/24
+ip rule show                             # rule from 10.0.N.0/24 iif veth0_<hash>
 sudo ip netns exec ns_<hash> ping -c1 1.1.1.1
 cat /etc/netns/ns_<hash>/resolv.conf
 ```
 
-Если GUI не запускается на Wayland, проверьте, что установлен XWayland (`xorg-xwayland` в Arch, `xwayland` в Debian/Ubuntu).
+If the GUI does not start on Wayland, make sure XWayland is installed (`xorg-xwayland` on Arch, `xwayland` on Debian/Ubuntu).
 
-Ранние версии InterMux регистрировали в `rt_tables` таблицы `<интерфейс>_rt`. Они не влияли на трафик namespace и больше не создаются. `reset` удаляет их вместе со связанными правилами.
+Early InterMux versions registered `<interface>_rt` tables in `rt_tables`. They had no effect on namespace traffic and are no longer created. `reset` removes them together with their rules.
 
-## Лицензия
+## License
 
-MIT, см. [license](license). Исходный код: Rishi Bhati, 2025.
+MIT, see [LICENSE](LICENSE). Original project: Rishi Bhati, 2025. Changes in this fork: Exord, 2026.
