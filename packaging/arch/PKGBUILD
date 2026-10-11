@@ -2,7 +2,7 @@
 
 pkgname=intermux-git
 _pkgname=intermux
-pkgver=.r65.g7863c86
+pkgver=2.0.0
 pkgrel=1
 pkgdesc="Run applications through a chosen network interface using network namespaces"
 arch=('any')
