@@ -12,6 +12,7 @@ from intermux import binding
 from intermux.binding import BindError, bind
 from intermux.gui import theme
 from intermux.gui.dialogs import ask_on_running
+from intermux.gui.history import History
 from intermux.log import setup as setup_logging
 from intermux.net import dns, interfaces, namespace, shaping, traffic
 from intermux.net.namespace import State
@@ -35,6 +36,7 @@ class App:
         self.user = user
         self.pending: list[tuple[str, str, list[str] | None]] = []
         self.states: list[State] = []
+        self.history = History(user)
         self.last_traffic: dict[str, tuple[float, traffic.Counters]] = {}
         # Held by background actions so that auto-reconnect does not rewire a namespace being removed.
         self.busy = threading.Lock()
@@ -65,9 +67,10 @@ class App:
 
         self.iface_box = ttk.Combobox(self._row(main, "Interface"), state="readonly")
         self.iface_box.pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.app_entry = ttk.Entry(self._row(main, "App / Path"))
+        self.app_entry = ttk.Combobox(self._row(main, "App / Path"), values=self.history.apps)
         self.app_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.app_entry.bind("<Return>", lambda _: self.add())
+        self.app_entry.bind("<<ComboboxSelected>>", lambda _: self._restore_from_history())
         self.dns_box = ttk.Combobox(self._row(main, "DNS"), values=DNS_CHOICES)
         self.dns_box.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.dns_box.set(AUTO_DNS)
@@ -264,16 +267,29 @@ class App:
             path, iface, f"{ns.name} ({'existing' if exists else 'new'})", ns.subnet, dns_text))
         self.app_entry.delete(0, tk.END)
 
+    def _restore_from_history(self) -> None:
+        """Picking an app from the history brings back the interface and DNS it was started with."""
+        item = self.history.find(self.app_entry.get())
+        if item is None:
+            return
+        if item.interface in self.iface_box["values"]:
+            self.iface_box.set(item.interface)
+        self.dns_box.set(item.dns)
+
     def assign(self) -> None:
         if not self.pending:
             messagebox.showinfo("Info", "No applications to assign.")
             return
         for app, iface, servers in self.pending:
             try:
-                bind(app, iface, self.user, lambda path, pids: ask_on_running(self.root, path, pids), servers)
+                ns = bind(app, iface, self.user, lambda path, pids: ask_on_running(self.root, path, pids), servers)
             except (BindError, CommandError) as exc:
                 log.exception("Cannot start %s via %s", app, iface)
                 messagebox.showerror(f"Cannot start {os.path.basename(app)}", str(exc))
+                continue
+            if ns:
+                self.history.add(app, iface, ", ".join(servers) if servers else AUTO_DNS)
+        self.app_entry["values"] = self.history.apps
         self.clear()
         self.refresh_active()
 

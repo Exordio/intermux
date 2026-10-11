@@ -6,7 +6,7 @@ from __future__ import annotations
 import configparser
 import os
 
-from intermux.system.users import User
+from intermux.system.users import User, give_to
 
 
 def is_firefox(app: str) -> bool:
@@ -32,9 +32,7 @@ def _profiles_dir(home: str) -> str:
 def _interface_profile(user: User, iface: str) -> str:
     profile = os.path.join(_profiles_dir(user.home), f"intermux-{iface}")
     os.makedirs(profile, exist_ok=True)
-    # We run as root: hand the directories we may have just created back to the user.
-    for path in (os.path.dirname(_profiles_dir(user.home)), _profiles_dir(user.home), profile):
-        os.chown(path, user.uid, user.gid)
+    give_to(user, profile)
     return profile
 
 

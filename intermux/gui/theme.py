@@ -17,6 +17,12 @@ FONT = ("monospace", 10)
 
 def apply(root: tk.Tk) -> None:
     root.configure(bg=BG)
+    # The drop-down list of a combobox is a plain Tk listbox, styled through the option database.
+    root.option_add("*TCombobox*Listbox.background", FIELD)
+    root.option_add("*TCombobox*Listbox.foreground", FG)
+    root.option_add("*TCombobox*Listbox.selectBackground", SELECTION)
+    root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
+    root.option_add("*TCombobox*Listbox.font", FONT)
     style = ttk.Style(root)
     style.theme_use("default")
     style.configure("TFrame", background=BG)

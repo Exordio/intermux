@@ -30,6 +30,17 @@ def invoking_user() -> User:
     return User(entry.pw_name, entry.pw_uid, entry.pw_gid, entry.pw_dir)
 
 
+def give_to(user: User, path: str) -> None:
+    """Hand a file created as root inside the user's home back to the user, with any directories
+    on the way that root created too."""
+    path = os.path.abspath(path)
+    home = os.path.abspath(user.home)
+    while path.startswith(home + os.sep):
+        if os.stat(path).st_uid == 0:
+            os.chown(path, user.uid, user.gid)
+        path = os.path.dirname(path)
+
+
 def _lookup(func, key):
     try:
         return func(key)
