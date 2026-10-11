@@ -34,9 +34,14 @@ def apply(root: tk.Tk) -> None:
               selectbackground=[("readonly", FIELD)], selectforeground=[("readonly", FG)])
 
 
-def table(parent: tk.Widget, columns: dict[str, int], height: int) -> ttk.Treeview:
-    """Treeview with the given column titles and widths."""
-    tree = ttk.Treeview(parent, columns=list(columns), show="headings", height=height, selectmode="browse")
+def table(parent: tk.Widget, columns: dict[str, int], height: int,
+          tree_column: tuple[str, int] | None = None) -> ttk.Treeview:
+    """Treeview with the given column titles and widths, optionally with a hierarchy column first."""
+    tree = ttk.Treeview(parent, columns=list(columns), height=height, selectmode="browse",
+                        show="tree headings" if tree_column else "headings")
+    if tree_column:
+        tree.heading("#0", text=tree_column[0], anchor=tk.W)
+        tree.column("#0", width=tree_column[1], minwidth=60, anchor=tk.W)
     for title, width in columns.items():
         tree.heading(title, text=title, anchor=tk.W)
         tree.column(title, width=width, minwidth=60, anchor=tk.W)

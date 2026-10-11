@@ -1,4 +1,4 @@
-"""Binding an app to an interface: the flow shared by the CLI and the GUI."""
+"""Binding apps to interfaces and controlling them afterwards: the flows shared by the CLI and the GUI."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Callable
 
 from intermux.apps import launcher, processes
 from intermux.net import interfaces, namespace, registry
-from intermux.net.namespace import Namespace
+from intermux.net.namespace import Namespace, State
 from intermux.system.users import User
 
 
@@ -50,6 +50,40 @@ def bind(app: str, iface_name: str, user: User,
             processes.stop(pids)
 
     ns = namespace.setup(iface, dns_servers)
-    launcher.launch(path, ns, iface.name, user, separate_profile=choice is OnRunning.SEPARATE)
-    registry.add_app(ns.name, path)
+    app = registry.App(path, separate_profile=choice is OnRunning.SEPARATE)
+    launcher.launch(path, ns, iface.name, user, separate_profile=app.separate_profile)
+    registry.add_app(ns.name, app)
     return ns
+
+
+def stop_app(state: State, path: str, force: bool = False) -> None:
+    _terminate(state, state.running.get(path, []), force)
+    registry.remove_app(state.entry.namespace, path)
+
+
+def restart_app(state: State, path: str, user: User) -> None:
+    """Stop the app and start it again in the same namespace with the same options."""
+    app = next((app for app in state.entry.apps if app.path == path), registry.App(path))
+    _terminate(state, state.running.get(path, []), force=False)
+    launcher.launch(path, state.ns, state.entry.interface, user, separate_profile=app.separate_profile)
+
+
+def stop_all(state: State, force: bool = False) -> None:
+    """Stop every process in the namespace, including ones InterMux did not start itself."""
+    processes_in_ns = processes.in_namespace(state.entry.namespace)
+    top = [pid for pid, (_, parent) in processes_in_ns.items() if parent not in processes_in_ns]
+    _terminate(state, top, force)
+    for app in state.entry.apps:
+        registry.remove_app(state.entry.namespace, app.path)
+
+
+def remove_namespace(state: State) -> None:
+    stop_all(state)
+    namespace.teardown(state.ns)
+
+
+def _terminate(state: State, pids: list[int], force: bool) -> None:
+    """Stop the processes, then kill whatever they left behind in the namespace."""
+    tree = processes.with_descendants(pids, processes.in_namespace(state.entry.namespace))
+    processes.stop(pids, force=force)
+    processes.stop(tree, force=True)

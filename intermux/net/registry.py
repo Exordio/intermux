@@ -10,6 +10,12 @@ STATE_DIR = "/run/intermux"
 
 
 @dataclass
+class App:
+    path: str
+    separate_profile: bool = False
+
+
+@dataclass
 class Entry:
     namespace: str
     interface: str
@@ -17,13 +23,15 @@ class Entry:
     route: str
     dns: list[str]
     dns_auto: bool
-    apps: list[str] = field(default_factory=list)
+    apps: list[App] = field(default_factory=list)
 
 
 def load(namespace: str) -> Entry | None:
     try:
         with open(_path(namespace)) as f:
-            return Entry(**json.load(f))
+            data = json.load(f)
+        data["apps"] = [App(app) if isinstance(app, str) else App(**app) for app in data.get("apps", [])]
+        return Entry(**data)
     except (OSError, ValueError, TypeError):
         return None
 
@@ -41,10 +49,17 @@ def remove(namespace: str) -> None:
         pass
 
 
-def add_app(namespace: str, app: str) -> None:
+def add_app(namespace: str, app: App) -> None:
     entry = load(namespace)
-    if entry and app not in entry.apps:
-        entry.apps.append(app)
+    if entry:
+        entry.apps = [known for known in entry.apps if known.path != app.path] + [app]
+        save(entry)
+
+
+def remove_app(namespace: str, path: str) -> None:
+    entry = load(namespace)
+    if entry:
+        entry.apps = [app for app in entry.apps if app.path != path]
         save(entry)
 
 

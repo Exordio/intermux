@@ -8,7 +8,7 @@ import os
 import re
 import shlex
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 from intermux.apps import processes
@@ -96,6 +96,8 @@ class Namespace:
 class State:
     entry: registry.Entry
     connection: str
+    running: dict[str, list[int]] = field(default_factory=dict)
+    """App path -> pids of its main processes."""
 
     @property
     def ns(self) -> Namespace:
@@ -157,9 +159,14 @@ def active() -> list[State]:
             namespace=ns.name, interface=_guess_interface(ns, all_interfaces), subnet=ns.subnet, route="?",
             dns=dns.read_resolv_conf(ns.etc_dir), dns_auto=False,
         )
-        running = processes.names_in_namespace(ns.name)
-        entry.apps = [app for app in entry.apps if processes.process_name(app) in running]
-        result.append(State(entry, _connection(ns, all_interfaces.get(entry.interface))))
+        names = processes.in_namespace(ns.name)
+        running = {}
+        for app in entry.apps:
+            pids = [pid for pid, (name, _) in names.items() if name == processes.process_name(app.path)]
+            if pids:
+                running[app.path] = pids
+        entry.apps = [app for app in entry.apps if app.path in running]
+        result.append(State(entry, _connection(ns, all_interfaces.get(entry.interface)), running))
     return result
 
 

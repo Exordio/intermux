@@ -4,9 +4,10 @@ import argparse
 import os
 
 from intermux import log
+from intermux import binding
 from intermux.binding import BindError, OnRunning, bind
 from intermux.net import dns, interfaces, namespace
-from intermux.net.namespace import Namespace
+from intermux.net.namespace import Namespace, State
 from intermux.system import deps
 from intermux.system.privileges import is_root
 from intermux.system.shell import CommandError
@@ -37,7 +38,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"  Subnet:    {entry.subnet}")
         print(f"  Route:     {entry.route}")
         print(f"  DNS:       {', '.join(entry.dns)}{' (auto)' if entry.dns_auto else ''}")
-        print(f"  Apps:      {', '.join(map(os.path.basename, entry.apps)) or '-'}")
+        apps = (f"{os.path.basename(path)} (PID {', '.join(map(str, pids))})" for path, pids in state.running.items())
+        print(f"  Apps:      {', '.join(apps) or '-'}")
     return 0
 
 
@@ -66,6 +68,32 @@ def cmd_dns(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_stop(args: argparse.Namespace) -> int:
+    matches = _find_app(args.app, args.iface)
+    for state, path in matches:
+        binding.stop_app(state, path, force=args.kill)
+        print(f"Stopped {os.path.basename(path)} in {state.entry.namespace}")
+    return 0 if matches else _not_running(args.app)
+
+
+def cmd_restart(args: argparse.Namespace) -> int:
+    matches = _find_app(args.app, args.iface)
+    for state, path in matches:
+        binding.restart_app(state, path, invoking_user())
+        print(f"Restarted {os.path.basename(path)} in {state.entry.namespace}")
+    return 0 if matches else _not_running(args.app)
+
+
+def cmd_remove(args: argparse.Namespace) -> int:
+    states = [state for state in namespace.active() if state.entry.interface == args.iface]
+    for state in states:
+        binding.remove_namespace(state)
+        print(f"Removed {state.entry.namespace} with everything running in it")
+    if not states:
+        print(f"Error: no namespace for {args.iface}.")
+    return 0 if states else 1
+
+
 def cmd_reconnect(args: argparse.Namespace) -> int:
     reconnected = namespace.reconnect_lost()
     print(f"Reconnected: {', '.join(reconnected)}" if reconnected else "Nothing to reconnect.")
@@ -86,6 +114,18 @@ def cmd_check(args: argparse.Namespace) -> int:
     print("Missing dependencies:")
     for tool, hint in missing:
         print(f"  {tool}: {hint}")
+    return 1
+
+
+def _find_app(name: str, iface: str | None) -> list[tuple[State, str]]:
+    """Running apps matching a command name or path, optionally only on one interface."""
+    return [(state, path) for state in namespace.active()
+            if iface is None or state.entry.interface == iface
+            for path in state.running if name in (path, os.path.basename(path))]
+
+
+def _not_running(name: str) -> int:
+    print(f"Error: {name} is not running in any namespace.")
     return 1
 
 
@@ -112,6 +152,17 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("list", help="list interfaces that can be used").set_defaults(func=cmd_list, root=False)
     commands.add_parser("check", help="check system dependencies").set_defaults(func=cmd_check, root=False)
     commands.add_parser("status", help="show namespaces and what they serve").set_defaults(func=cmd_status, root=False)
+    for name, func, help_text in (("stop", cmd_stop, "stop an application started by InterMux"),
+                                  ("restart", cmd_restart, "restart an application in the same namespace")):
+        command = commands.add_parser(name, help=help_text)
+        command.add_argument("app", help="command name or path, as shown by status")
+        command.add_argument("--iface", help="only in the namespace of this interface")
+        if name == "stop":
+            command.add_argument("--kill", action="store_true", help="SIGKILL at once instead of SIGTERM")
+        command.set_defaults(func=func, root=True)
+    remove = commands.add_parser("remove", help="stop everything in a namespace and remove it")
+    remove.add_argument("--iface", required=True, help="interface the namespace serves")
+    remove.set_defaults(func=cmd_remove, root=True)
     commands.add_parser("reconnect", help="reconnect namespaces whose interface came back") \
         .set_defaults(func=cmd_reconnect, root=True)
     commands.add_parser("reset", help="remove everything InterMux created").set_defaults(func=cmd_reset, root=True)

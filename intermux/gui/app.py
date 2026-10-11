@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
 from intermux.apps import launcher
+from intermux import binding
 from intermux.binding import BindError, bind
 from intermux.gui import theme
 from intermux.gui.dialogs import ask_on_running
 from intermux.log import setup as setup_logging
 from intermux.net import dns, interfaces, namespace
-from intermux.net.namespace import Namespace
+from intermux.net.namespace import Namespace, State
 from intermux.system import deps
 from intermux.system.privileges import is_root, reexec_as_root
 from intermux.system.session import allow_root_on_display, session_env
@@ -31,9 +33,12 @@ class App:
         self.root = root
         self.user = user
         self.pending: list[tuple[str, str, list[str] | None]] = []
+        self.states: list[State] = []
+        # Held by background actions so that auto-reconnect does not rewire a namespace being removed.
+        self.busy = threading.Lock()
 
         root.title("InterMux")
-        root.geometry("1020x720")
+        root.geometry("1020x790")
         theme.apply(root)
 
         main = ttk.Frame(root, padding=20)
@@ -71,13 +76,17 @@ class App:
         self.pending_table = self._section(
             main, "Pending: will be started on Assign",
             {"App": 220, "Interface": 90, "Namespace": 195, "Subnet": 120, "DNS": 275}, height=4,
-            buttons=(("Assign", self.assign), ("Clear", self.clear)),
+            buttons=[[("Assign", self.assign), ("Clear", self.clear)]],
         )
         self.active_table = self._section(
-            main, "Active namespaces",
-            {"Namespace": 110, "State": 130, "Interface": 90, "Subnet": 115, "Route": 200, "DNS": 200, "Apps": 130},
-            height=6,
-            buttons=(("Set DNS for selected", self.set_dns), ("Reset Everything", self.reset)),
+            main, "Active: select a namespace or an app in it",
+            {"Status": 190, "Interface": 90, "Subnet": 115, "Route": 200, "DNS": 210}, height=8,
+            tree_column=("Namespace / App", 150),
+            buttons=[
+                [("Stop", lambda: self.stop(force=False)), ("Kill", lambda: self.stop(force=True)),
+                 ("Restart", self.restart), ("Remove namespace", self.remove)],
+                [("Set DNS", self.set_dns), ("Reset Everything", self.reset)],
+            ],
         )
 
         self.refresh()
@@ -91,15 +100,17 @@ class App:
         return row
 
     @staticmethod
-    def _section(parent: tk.Widget, title: str, columns: dict[str, int], height: int, buttons) -> ttk.Treeview:
+    def _section(parent: tk.Widget, title: str, columns: dict[str, int], height: int,
+                 buttons, tree_column: tuple[str, int] | None = None) -> ttk.Treeview:
         frame = ttk.LabelFrame(parent, text=title, padding=8)
         frame.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
-        table = theme.table(frame, columns, height)
+        table = theme.table(frame, columns, height, tree_column)
         table.pack(fill=tk.BOTH, expand=True)
-        row = ttk.Frame(frame)
-        row.pack(pady=(8, 0))
-        for text, command in buttons:
-            ttk.Button(row, text=text, width=22, command=command).pack(side=tk.LEFT, padx=6)
+        for button_row in buttons:
+            row = ttk.Frame(frame)
+            row.pack(pady=(8, 0))
+            for text, command in button_row:
+                ttk.Button(row, text=text, width=20, command=command).pack(side=tk.LEFT, padx=6)
         return table
 
     def refresh(self) -> None:
@@ -112,17 +123,74 @@ class App:
     def refresh_active(self) -> None:
         selected = self.active_table.selection()
         self.active_table.delete(*self.active_table.get_children())
-        for state in namespace.active():
+        self.states = namespace.active()
+        for state in self.states:
             entry = state.entry
             dns_text = ", ".join(entry.dns) + (" (auto)" if entry.dns_auto else "")
-            apps = ", ".join(map(os.path.basename, entry.apps)) or "-"
-            self.active_table.insert("", tk.END, iid=entry.namespace, values=(
-                entry.namespace, state.connection, entry.interface, entry.subnet, entry.route, dns_text, apps))
+            self.active_table.insert("", tk.END, iid=entry.namespace, text=entry.namespace, open=True, values=(
+                state.connection, entry.interface, entry.subnet, entry.route, dns_text))
+            for path, pids in state.running.items():
+                self.active_table.insert(entry.namespace, tk.END, iid=f"{entry.namespace}|{path}",
+                                         text=os.path.basename(path),
+                                         values=(f"PID {', '.join(map(str, pids))}", "", "", "", ""))
         self.active_table.selection_set([iid for iid in selected if self.active_table.exists(iid)])
 
+    def _selection(self) -> tuple[State, str | None] | None:
+        """Selected namespace state and app path (None when the namespace row itself is selected)."""
+        selected = self.active_table.selection()
+        name, _, path = selected[0].partition("|") if selected else ("", "", "")
+        state = next((state for state in self.states if state.entry.namespace == name), None)
+        if state is None:
+            messagebox.showinfo("Info", "Select a namespace or an app in the Active list.")
+            return None
+        return state, path or None
+
+    def _in_background(self, action: str, func) -> None:
+        """Stopping apps may wait for them for seconds, so it runs off the Tk thread."""
+        def work() -> None:
+            with self.busy:
+                try:
+                    func()
+                except (CommandError, OSError) as exc:
+                    log.exception("%s failed", action)
+                    self.root.after(0, lambda: messagebox.showerror(f"{action} failed", str(exc)))
+            self.root.after(0, self.refresh_active)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def stop(self, force: bool) -> None:
+        selection = self._selection()
+        if not selection:
+            return
+        state, path = selection
+        if path:
+            self._in_background("Stop", lambda: binding.stop_app(state, path, force))
+        elif messagebox.askyesno("Stop", f"Stop everything running in {state.entry.namespace}?"):
+            self._in_background("Stop", lambda: binding.stop_all(state, force))
+
+    def restart(self) -> None:
+        selection = self._selection()
+        if not selection:
+            return
+        state, path = selection
+        paths = [path] if path else list(state.running)
+        self._in_background("Restart", lambda: [binding.restart_app(state, p, self.user) for p in paths])
+
+    def remove(self) -> None:
+        selection = self._selection()
+        if selection and messagebox.askyesno(
+            "Remove namespace",
+            f"Stop everything running in {selection[0].entry.namespace} and remove the namespace?",
+        ):
+            self._in_background("Remove", lambda: binding.remove_namespace(selection[0]))
+
     def _schedule_active_refresh(self) -> None:
-        for name in namespace.reconnect_lost():
-            log.info("%s reconnected: its interface is back", name)
+        if self.busy.acquire(blocking=False):
+            try:
+                for name in namespace.reconnect_lost():
+                    log.info("%s reconnected: its interface is back", name)
+            finally:
+                self.busy.release()
         self.refresh_active()
         self.root.after(ACTIVE_REFRESH_MS, self._schedule_active_refresh)
 
@@ -175,16 +243,15 @@ class App:
         self.pending_table.delete(*self.pending_table.get_children())
 
     def set_dns(self) -> None:
-        selected = self.active_table.selection()
-        if not selected:
-            messagebox.showinfo("Info", "Select a namespace in the Active list.")
+        selection = self._selection()
+        if not selection:
             return
         try:
             servers = self._dns_choice()
         except ValueError as exc:
             messagebox.showerror("Invalid DNS", str(exc))
             return
-        namespace.set_dns(Namespace.from_name(selected[0]), servers)
+        namespace.set_dns(selection[0].ns, servers)
         self.refresh_active()
 
     def reset(self) -> None:
