@@ -6,7 +6,7 @@ A Linux tool that runs an application so that all of its network traffic goes th
 
 This is a fork of [Rishi-Bhati/intermux](https://github.com/Rishi-Bhati/intermux). It runs on Linux only; Windows support is not planned in this fork and was removed by reverting the upstream commits that added it.
 
-![InterMux window](https://i.imgur.com/MPeYAyd.png)
+![InterMux window](https://i.imgur.com/nRBznni.png)
 
 ## How it works
 

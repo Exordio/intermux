@@ -6,7 +6,7 @@
 
 Это форк [Rishi-Bhati/intermux](https://github.com/Rishi-Bhati/intermux). Работает только под Linux, поддержка Windows в этом форке не планируется. Был проведен реверт для отмены поддержки винды.
 
-![Окно InterMux](https://i.imgur.com/MPeYAyd.png)
+![Окно InterMux](https://i.imgur.com/nRBznni.png)
 
 ## Принцип работы
 
