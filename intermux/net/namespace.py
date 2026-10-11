@@ -11,7 +11,8 @@ import shutil
 from dataclasses import dataclass
 from typing import Callable
 
-from intermux.net import dns
+from intermux.apps import processes
+from intermux.net import dns, interfaces, registry
 from intermux.net.interfaces import Interface
 from intermux.system.shell import IP, IPTABLES, SYSCTL, run
 
@@ -86,52 +87,67 @@ def existing() -> list[Namespace]:
     return [Namespace(match.group(1)) for match in map(_NAME.match, names) if match]
 
 
-def setup(iface: Interface) -> Namespace:
+def setup(iface: Interface, dns_servers: list[str] | None = None) -> Namespace:
+    """Create the namespace for the interface, or rewire it if it already exists.
+
+    Reusing a live namespace keeps apps started in it earlier connected.
+    dns_servers=None keeps the servers of a reused namespace and picks them
+    automatically for a new one, see dns.auto_servers().
+    """
     ns = Namespace.for_interface(iface.name)
-    log.info("Setting up %s for %s (%s)", ns.name, iface.name, ns.subnet)
-    teardown(ns)
-
-    run(IP, "netns", "add", ns.name)
-    run(IP, "link", "add", ns.host_veth, "type", "veth", "peer", "name", ns.ns_veth)
-    run(IP, "link", "set", ns.ns_veth, "netns", ns.name)
-    run(IP, "addr", "add", f"{ns.host_ip}/24", "dev", ns.host_veth)
-    run(IP, "link", "set", ns.host_veth, "up")
-    for args in (
-        ("addr", "add", f"{ns.ns_ip}/24", "dev", ns.ns_veth),
-        ("link", "set", ns.ns_veth, "up"),
-        ("link", "set", "lo", "up"),
-        ("route", "add", "default", "via", ns.host_ip),
-    ):
-        run(IP, "netns", "exec", ns.name, IP, *args)
-
-    run(SYSCTL, "-qw", "net.ipv4.ip_forward=1")
-    _add_rule(ns, "nat", "POSTROUTING", "MASQUERADE", "-s", ns.subnet, "-o", iface.name)
-    _add_rule(ns, "filter", "FORWARD", "ACCEPT", "-i", ns.host_veth, "-o", iface.name)
-    _add_rule(ns, "filter", "FORWARD", "ACCEPT", "-i", iface.name, "-o", ns.host_veth,
-              "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED")
-
-    # Without its own table the namespace traffic would leave through the host's default route.
-    # iif keeps the host's own replies to the namespace (source 10.0.N.1) in the main table.
-    route = _default_route(iface)
-    if route:
-        run(IP, "route", "add", "default", *route, "table", ns.table)
-        run(IP, "rule", "add", "from", ns.subnet, "iif", ns.host_veth, "table", ns.table, "priority", ns.priority)
-        log.info("Routing %s %s (table %s)", ns.subnet, " ".join(route), ns.table)
+    previous = registry.load(ns.name)
+    if _is_alive(ns):
+        log.info("Reusing %s for %s (%s)", ns.name, iface.name, ns.subnet)
+        _unwire(ns)
     else:
-        log.warning("%s has no gateway, %s will use the host's default route", iface.name, ns.name)
+        log.info("Creating %s for %s (%s)", ns.name, iface.name, ns.subnet)
+        teardown(ns)
+        _create(ns)
+        previous = None
 
-    dns.write_resolv_conf(ns.etc_dir, dns.system_servers())
+    route = _wire(ns, iface)
+    if dns_servers is None and previous and not previous.dns_auto:
+        dns_servers = previous.dns
+    servers, auto = _apply_dns(ns, iface, dns_servers)
+    registry.save(registry.Entry(
+        namespace=ns.name, interface=iface.name, subnet=ns.subnet,
+        route=" ".join(route) if route else "host default route",
+        dns=servers, dns_auto=auto, apps=previous.apps if previous else [],
+    ))
     return ns
 
 
+def set_dns(ns: Namespace, dns_servers: list[str] | None) -> list[str]:
+    """Change DNS of a live namespace. Apps already running in it pick the change up."""
+    entry = registry.load(ns.name)
+    iface = interfaces.find(entry.interface) if entry else None
+    servers, auto = _apply_dns(ns, iface, dns_servers)
+    if entry:
+        entry.dns, entry.dns_auto = servers, auto
+        registry.save(entry)
+    return servers
+
+
+def active() -> list[registry.Entry]:
+    """Live namespaces with only the apps that still run in them."""
+    result = []
+    for ns in existing():
+        entry = registry.load(ns.name) or registry.Entry(
+            namespace=ns.name, interface=_guess_interface(ns), subnet=ns.subnet, route="?",
+            dns=dns.read_resolv_conf(ns.etc_dir), dns_auto=False,
+        )
+        running = processes.names_in_namespace(ns.name)
+        entry.apps = [app for app in entry.apps if processes.process_name(app) in running]
+        result.append(entry)
+    return result
+
+
 def teardown(ns: Namespace) -> None:
-    run(IP, "rule", "del", "priority", ns.priority, check=False)
-    run(IP, "route", "flush", "table", ns.table, check=False)
+    _unwire(ns)
     run(IP, "netns", "del", ns.name, check=False)
     run(IP, "link", "del", ns.host_veth, check=False)
-    # Older versions added MASQUERADE rules without a comment.
-    _delete_rules(lambda rule: ns.comment in rule or (f"-s {ns.subnet}" in rule and "MASQUERADE" in rule))
     shutil.rmtree(ns.etc_dir, ignore_errors=True)
+    registry.remove(ns.name)
 
 
 def reset() -> None:
@@ -148,6 +164,67 @@ def reset() -> None:
                 run(IP, "route", "flush", "table", str(table), check=False)
                 _delete_rules(lambda rule: f"-s 10.0.{octet}.0/24" in rule and "MASQUERADE" in rule)
     _drop_legacy_rt_tables()
+
+
+def _guess_interface(ns: Namespace) -> str:
+    """For namespaces created before the registry existed."""
+    names = (iface.name for iface in interfaces.all_interfaces())
+    return next((name for name in names if Namespace.for_interface(name) == ns), "?")
+
+
+def _is_alive(ns: Namespace) -> bool:
+    return ns in existing() and bool(run(IP, "link", "show", ns.host_veth, check=False))
+
+
+def _create(ns: Namespace) -> None:
+    run(IP, "netns", "add", ns.name)
+    run(IP, "link", "add", ns.host_veth, "type", "veth", "peer", "name", ns.ns_veth)
+    run(IP, "link", "set", ns.ns_veth, "netns", ns.name)
+    run(IP, "addr", "add", f"{ns.host_ip}/24", "dev", ns.host_veth)
+    run(IP, "link", "set", ns.host_veth, "up")
+    for args in (
+        ("addr", "add", f"{ns.ns_ip}/24", "dev", ns.ns_veth),
+        ("link", "set", ns.ns_veth, "up"),
+        ("link", "set", "lo", "up"),
+        ("route", "add", "default", "via", ns.host_ip),
+    ):
+        run(IP, "netns", "exec", ns.name, IP, *args)
+
+
+def _wire(ns: Namespace, iface: Interface) -> list[str] | None:
+    """NAT, forwarding and policy routing from the namespace to the interface."""
+    run(SYSCTL, "-qw", "net.ipv4.ip_forward=1")
+    _add_rule(ns, "nat", "POSTROUTING", "MASQUERADE", "-s", ns.subnet, "-o", iface.name)
+    _add_rule(ns, "filter", "FORWARD", "ACCEPT", "-i", ns.host_veth, "-o", iface.name)
+    _add_rule(ns, "filter", "FORWARD", "ACCEPT", "-i", iface.name, "-o", ns.host_veth,
+              "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED")
+
+    # Without its own table the namespace traffic would leave through the host's default route.
+    # iif keeps the host's own replies to the namespace (source 10.0.N.1) in the main table.
+    route = _default_route(iface)
+    if route:
+        run(IP, "route", "add", "default", *route, "table", ns.table)
+        run(IP, "rule", "add", "from", ns.subnet, "iif", ns.host_veth, "table", ns.table, "priority", ns.priority)
+        log.info("Routing %s %s (table %s)", ns.subnet, " ".join(route), ns.table)
+    else:
+        log.warning("%s has no gateway, %s will use the host's default route", iface.name, ns.name)
+    return route
+
+
+def _unwire(ns: Namespace) -> None:
+    run(IP, "rule", "del", "priority", ns.priority, check=False)
+    run(IP, "route", "flush", "table", ns.table, check=False)
+    # Older versions added MASQUERADE rules without a comment.
+    _delete_rules(lambda rule: ns.comment in rule or (f"-s {ns.subnet}" in rule and "MASQUERADE" in rule))
+
+
+def _apply_dns(ns: Namespace, iface: Interface | None, servers: list[str] | None) -> tuple[list[str], bool]:
+    auto = not servers
+    if auto:
+        servers = dns.auto_servers(iface, interfaces.all_interfaces()) if iface else list(dns.FALLBACK)
+    dns.write_resolv_conf(ns.etc_dir, servers)
+    log.info("DNS for %s: %s%s", ns.name, ", ".join(servers), " (auto)" if auto else "")
+    return servers, auto
 
 
 def _default_route(iface: Interface) -> list[str] | None:

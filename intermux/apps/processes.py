@@ -4,13 +4,27 @@ import os
 import signal
 import time
 
-from intermux.system.shell import run
+from intermux.system.shell import IP, run
+
+
+def process_name(app: str) -> str:
+    """Name the kernel gives the app's process: the file name cut to 15 characters."""
+    return os.path.basename(app)[:15]
 
 
 def running(app: str, uid: int) -> list[int]:
-    """PIDs of the user's processes named like the app. The kernel keeps only 15 characters of the name."""
-    name = os.path.basename(app)[:15]
-    return [int(pid) for pid in run("pgrep", "-x", "-u", str(uid), name, check=False).split()]
+    return [int(pid) for pid in run("pgrep", "-x", "-u", str(uid), process_name(app), check=False).split()]
+
+
+def names_in_namespace(namespace: str) -> set[str]:
+    names = set()
+    for pid in run(IP, "netns", "pids", namespace, check=False).split():
+        try:
+            with open(f"/proc/{pid}/comm") as f:
+                names.add(f.read().strip())
+        except OSError:
+            pass
+    return names
 
 
 def stop(pids: list[int], timeout: float = 5.0) -> None:

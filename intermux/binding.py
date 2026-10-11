@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Callable
 
 from intermux.apps import launcher, processes
-from intermux.net import interfaces, namespace
+from intermux.net import interfaces, namespace, registry
 from intermux.net.namespace import Namespace
 from intermux.system.users import User
 
@@ -22,11 +22,13 @@ class BindError(Exception):
 
 
 def bind(app: str, iface_name: str, user: User,
-         on_running: Callable[[str, list[int]], OnRunning]) -> Namespace | None:
+         on_running: Callable[[str, list[int]], OnRunning],
+         dns_servers: list[str] | None = None) -> Namespace | None:
     """Start the app through the interface. Returns None if the user cancelled.
 
     on_running is asked what to do when the app is already open: restart it on
     the selected network, start a second instance with a separate profile, or cancel.
+    dns_servers=None keeps DNS of an existing namespace or picks it automatically.
     """
     path = launcher.resolve(app)
     if path is None:
@@ -47,6 +49,7 @@ def bind(app: str, iface_name: str, user: User,
         if choice is OnRunning.RESTART:
             processes.stop(pids)
 
-    ns = namespace.setup(iface)
+    ns = namespace.setup(iface, dns_servers)
     launcher.launch(path, ns, iface.name, user, separate_profile=choice is OnRunning.SEPARATE)
+    registry.add_app(ns.name, path)
     return ns
