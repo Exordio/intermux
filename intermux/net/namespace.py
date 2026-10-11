@@ -15,7 +15,7 @@ from typing import Callable
 from intermux.apps import processes
 from intermux.net import dns, interfaces, registry, shaping, traffic
 from intermux.net.interfaces import Interface
-from intermux.system.shell import IP, IPTABLES, SYSCTL, run, which
+from intermux.system.shell import IP, IPTABLES, SYSCTL, CommandError, run, which
 
 log = logging.getLogger(__name__)
 
@@ -244,8 +244,16 @@ def reconnect(ns: Namespace) -> bool:
 
 def reconnect_lost(states: list[State] | None = None) -> list[str]:
     """Reconnect every namespace whose interface came back. Returns their names."""
-    return [state.entry.namespace for state in (active() if states is None else states)
-            if state.connection == NO_ROUTE and reconnect(state.ns)]
+    reconnected = []
+    for state in active() if states is None else states:
+        if state.connection != NO_ROUTE:
+            continue
+        try:
+            if reconnect(state.ns):
+                reconnected.append(state.entry.namespace)
+        except CommandError as exc:
+            log.warning("Cannot reconnect %s: %s", state.entry.namespace, exc)
+    return reconnected
 
 
 def teardown(ns: Namespace) -> None:

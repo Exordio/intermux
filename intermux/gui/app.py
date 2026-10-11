@@ -223,18 +223,22 @@ class App:
             self._in_background("Remove", lambda: binding.remove_namespace(selection[0]))
 
     def _schedule_active_refresh(self) -> None:
-        states = namespace.active()
-        if self.busy.acquire(blocking=False):
-            try:
-                reconnected = namespace.reconnect_lost(states)
-            finally:
-                self.busy.release()
-            for name in reconnected:
-                log.info("%s reconnected: its interface is back", name)
-            if reconnected:
-                states = namespace.active()
-        self.refresh_active(states)
+        # Scheduled first: an error in one refresh must not stop the following ones.
         self.root.after(ACTIVE_REFRESH_MS, self._schedule_active_refresh)
+        try:
+            states = namespace.active()
+            if self.busy.acquire(blocking=False):
+                try:
+                    reconnected = namespace.reconnect_lost(states)
+                finally:
+                    self.busy.release()
+                for name in reconnected:
+                    log.info("%s reconnected: its interface is back", name)
+                if reconnected:
+                    states = namespace.active()
+            self.refresh_active(states)
+        except Exception:
+            log.exception("Refreshing the Active list failed")
 
     def _dns_choice(self) -> list[str] | None:
         text = self.dns_box.get().strip()

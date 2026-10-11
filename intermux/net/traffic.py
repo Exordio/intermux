@@ -15,12 +15,12 @@ class Counters:
 
 
 def counters(host_veth: str) -> Counters | None:
-    links = json.loads(run(IP, "-s", "-j", "link", "show", host_veth, check=False) or "[]")
-    if not links:
+    try:
+        stats = json.loads(run(IP, "-s", "-j", "link", "show", host_veth, check=False) or "[]")[0]["stats64"]
+        # The host end transmits what the namespace downloads and receives what it uploads.
+        return Counters(down=stats["tx"]["bytes"], up=stats["rx"]["bytes"])
+    except (ValueError, LookupError, TypeError):
         return None
-    stats = links[0]["stats64"]
-    # The host end transmits what the namespace downloads and receives what it uploads.
-    return Counters(down=stats["tx"]["bytes"], up=stats["rx"]["bytes"])
 
 
 def format_bytes(count: float) -> str:
