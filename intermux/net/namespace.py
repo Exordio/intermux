@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from intermux.apps import processes
-from intermux.net import dns, interfaces, registry, traffic
+from intermux.net import dns, interfaces, registry, shaping, traffic
 from intermux.net.interfaces import Interface
 from intermux.system.shell import IP, IPTABLES, SYSCTL, run
 
@@ -136,8 +136,21 @@ def setup(iface: Interface, dns_servers: list[str] | None = None) -> Namespace:
         namespace=ns.name, interface=iface.name, subnet=ns.subnet,
         route=" ".join(route) if route else "none",
         dns=servers, dns_auto=auto, apps=previous.apps if previous else [],
+        limit_down=previous.limit_down if previous else None,
+        limit_up=previous.limit_up if previous else None,
     ))
     return ns
+
+
+def set_limits(ns: Namespace, down: float | None, up: float | None) -> None:
+    """Bandwidth limits in Mbit/s for everything in the namespace; None removes a limit."""
+    shaping.set_limit(ns.host_veth, down)
+    shaping.set_limit(ns.ns_veth, up, namespace=ns.name)
+    log.info("Limits for %s: down %s, up %s Mbit/s", ns.name, shaping.format_mbit(down), shaping.format_mbit(up))
+    entry = registry.load(ns.name)
+    if entry:
+        entry.limit_down, entry.limit_up = down, up
+        registry.save(entry)
 
 
 def set_dns(ns: Namespace, dns_servers: list[str] | None) -> list[str]:

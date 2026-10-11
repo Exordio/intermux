@@ -13,7 +13,7 @@ from intermux.binding import BindError, bind
 from intermux.gui import theme
 from intermux.gui.dialogs import ask_on_running
 from intermux.log import setup as setup_logging
-from intermux.net import dns, interfaces, namespace, traffic
+from intermux.net import dns, interfaces, namespace, shaping, traffic
 from intermux.net.namespace import Namespace, State
 from intermux.system import deps
 from intermux.system.privileges import is_root, reexec_as_root
@@ -40,7 +40,7 @@ class App:
         self.busy = threading.Lock()
 
         root.title("InterMux")
-        root.geometry("1140x790")
+        root.geometry("1200x830")
         theme.apply(root)
 
         main = ttk.Frame(root, padding=20)
@@ -82,13 +82,15 @@ class App:
         )
         self.active_table = self._section(
             main, "Active: select a namespace or an app in it",
-            {"Status": 150, "Interface": 90, "Route": 175, "DNS": 200, "Download": 155, "Upload": 155}, height=8,
+            {"Status": 150, "Interface": 90, "Route": 120, "DNS": 205, "Download": 145, "Upload": 145,
+             "Limit, Mbit/s": 115}, height=8,
             tree_column=("Namespace / App", 135),
             buttons=[
                 [("Stop", lambda: self.stop(force=False)), ("Kill", lambda: self.stop(force=True)),
                  ("Restart", self.restart), ("Remove namespace", self.remove)],
-                [("Set DNS", self.set_dns), ("Reset Everything", self.reset)],
+                [("Set DNS", self.set_dns), ("Set limit", self.set_limits), ("Reset Everything", self.reset)],
             ],
+            controls=self._limit_controls,
         )
 
         self.refresh()
@@ -103,17 +105,30 @@ class App:
 
     @staticmethod
     def _section(parent: tk.Widget, title: str, columns: dict[str, int], height: int,
-                 buttons, tree_column: tuple[str, int] | None = None) -> ttk.Treeview:
+                 buttons, tree_column: tuple[str, int] | None = None, controls=None) -> ttk.Treeview:
+        """Labelled table with rows of buttons under it; controls(row) may fill a row before the buttons."""
         frame = ttk.LabelFrame(parent, text=title, padding=8)
         frame.pack(fill=tk.BOTH, expand=True, pady=(0, 12))
         table = theme.table(frame, columns, height, tree_column)
         table.pack(fill=tk.BOTH, expand=True)
+        if controls:
+            row = ttk.Frame(frame)
+            row.pack(pady=(8, 0))
+            controls(row)
         for button_row in buttons:
             row = ttk.Frame(frame)
             row.pack(pady=(8, 0))
             for text, command in button_row:
                 ttk.Button(row, text=text, width=20, command=command).pack(side=tk.LEFT, padx=6)
         return table
+
+    def _limit_controls(self, row: ttk.Frame) -> None:
+        ttk.Label(row, text="Limit, Mbit/s (empty: none)   down", font=theme.FONT).pack(side=tk.LEFT)
+        self.limit_down = ttk.Entry(row, width=8)
+        self.limit_down.pack(side=tk.LEFT, padx=(6, 12))
+        ttk.Label(row, text="up", font=theme.FONT).pack(side=tk.LEFT)
+        self.limit_up = ttk.Entry(row, width=8)
+        self.limit_up.pack(side=tk.LEFT, padx=6)
 
     def refresh(self) -> None:
         names = [iface.name for iface in interfaces.selectable()]
@@ -130,8 +145,10 @@ class App:
             entry = state.entry
             dns_text = ", ".join(entry.dns) + (" (auto)" if entry.dns_auto else "")
             down, up = self._traffic_text(entry.namespace, state.traffic)
+            route = entry.route.replace(f" dev {entry.interface}", "") or entry.route
+            limit = f"{shaping.format_mbit(entry.limit_down)} / {shaping.format_mbit(entry.limit_up)}"
             self.active_table.insert("", tk.END, iid=entry.namespace, text=entry.namespace, open=True, values=(
-                state.connection, entry.interface, entry.route, dns_text, down, up))
+                state.connection, entry.interface, route, dns_text, down, up, limit))
             for path, pids in state.running.items():
                 self.active_table.insert(entry.namespace, tk.END, iid=f"{entry.namespace}|{path}",
                                          text=os.path.basename(path),
@@ -273,6 +290,19 @@ class App:
             messagebox.showerror("Invalid DNS", str(exc))
             return
         namespace.set_dns(selection[0].ns, servers)
+        self.refresh_active()
+
+    def set_limits(self) -> None:
+        selection = self._selection()
+        if not selection:
+            return
+        try:
+            down = shaping.parse_mbit(self.limit_down.get())
+            up = shaping.parse_mbit(self.limit_up.get())
+        except ValueError as exc:
+            messagebox.showerror("Invalid limit", f"Enter a number of Mbit/s or leave the field empty.\n\n{exc}")
+            return
+        namespace.set_limits(selection[0].ns, down, up)
         self.refresh_active()
 
     def reset(self) -> None:

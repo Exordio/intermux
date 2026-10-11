@@ -6,7 +6,7 @@ import os
 from intermux import log
 from intermux import binding
 from intermux.binding import BindError, OnRunning, bind
-from intermux.net import dns, interfaces, namespace, traffic
+from intermux.net import dns, interfaces, namespace, shaping, traffic
 from intermux.net.namespace import Namespace, State
 from intermux.system import deps
 from intermux.system.privileges import is_root
@@ -41,6 +41,9 @@ def cmd_status(args: argparse.Namespace) -> int:
         if state.traffic:
             print(f"  Traffic:   down {traffic.format_bytes(state.traffic.down)}, "
                   f"up {traffic.format_bytes(state.traffic.up)}")
+        if entry.limit_down or entry.limit_up:
+            print(f"  Limit:     down {shaping.format_mbit(entry.limit_down)}, "
+                  f"up {shaping.format_mbit(entry.limit_up)} Mbit/s")
         apps = (f"{os.path.basename(path)} (PID {', '.join(map(str, pids))})" for path, pids in state.running.items())
         print(f"  Apps:      {', '.join(apps) or '-'}")
     return 0
@@ -95,6 +98,16 @@ def cmd_remove(args: argparse.Namespace) -> int:
     if not states:
         print(f"Error: no namespace for {args.iface}.")
     return 0 if states else 1
+
+
+def cmd_limit(args: argparse.Namespace) -> int:
+    ns = Namespace.for_interface(args.iface)
+    if ns not in namespace.existing():
+        print(f"Error: no namespace for {args.iface}, start an app through it first.")
+        return 1
+    namespace.set_limits(ns, args.down or None, args.up or None)
+    print(f"{ns.name}: down {shaping.format_mbit(args.down)}, up {shaping.format_mbit(args.up)} Mbit/s")
+    return 0
 
 
 def cmd_reconnect(args: argparse.Namespace) -> int:
@@ -163,6 +176,11 @@ def main(argv: list[str] | None = None) -> int:
         if name == "stop":
             command.add_argument("--kill", action="store_true", help="SIGKILL at once instead of SIGTERM")
         command.set_defaults(func=func, root=True)
+    limit = commands.add_parser("limit", help="limit bandwidth of a namespace (no options remove the limits)")
+    limit.add_argument("--iface", required=True, help="interface the namespace serves")
+    limit.add_argument("--down", type=float, help="download limit, Mbit/s")
+    limit.add_argument("--up", type=float, help="upload limit, Mbit/s")
+    limit.set_defaults(func=cmd_limit, root=True)
     remove = commands.add_parser("remove", help="stop everything in a namespace and remove it")
     remove.add_argument("--iface", required=True, help="interface the namespace serves")
     remove.set_defaults(func=cmd_remove, root=True)

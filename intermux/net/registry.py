@@ -24,6 +24,9 @@ class Entry:
     dns: list[str]
     dns_auto: bool
     apps: list[App] = field(default_factory=list)
+    limit_down: float | None = None
+    limit_up: float | None = None
+    """Mbit/s, None for no limit."""
 
 
 def load(namespace: str) -> Entry | None:
