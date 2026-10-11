@@ -43,17 +43,19 @@
 
 ## 🚀 Getting the .exe
 
-### Option A — Download from Pre-release (Easiest) ⭐
+### Option A — Download from GitHub Actions (Easiest) ⭐
 
-The standalone `.exe` is available for download in the GitHub Releases section under the latest pre-release tag.
+The `.exe` is automatically built by GitHub Actions on a real Windows machine every time code is pushed.
 
-1. Go to your repo on GitHub → **Releases**
-2. Click the latest pre-release version
-3. Scroll down to **Assets** → download **InterMux.exe**
-4. Double-click `InterMux.exe` to run (approve UAC if prompted)
+1. Go to your repo on GitHub → **Actions** tab
+2. Click the latest **"Build InterMux Windows .exe"** workflow run
+3. Scroll down to **Artifacts** → download **InterMux-Windows-exe**
+4. Extract the zip → double-click `InterMux.exe` → approve UAC
+
+Or, when you publish a GitHub Release, the `.exe` is automatically attached to the release.
 
 > **Why can't I just run `pyinstaller` on Linux?**  
-> PyInstaller cannot cross-compile. Running it on Linux produces a Linux ELF binary that Windows cannot run. The spec file now blocks this with a clear error message. The build **must happen on a Windows machine**.
+> PyInstaller cannot cross-compile. Running it on Linux produces a Linux ELF binary that Windows cannot run. The spec file now blocks this with a clear error message. The build **must happen on a Windows machine** or via the GitHub Actions `windows-latest` runner.
 
 ---
 
