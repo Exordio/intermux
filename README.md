@@ -6,8 +6,7 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.6%2B-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](https://opensource.org/license/mit)
-[![Platform Linux](https://img.shields.io/badge/platform-Linux-orange.svg)](https://www.linux.org/)
-[![Platform Windows](https://img.shields.io/badge/platform-Windows%2010%2F11-blue.svg)](windows/README.md)
+[![Platform](https://img.shields.io/badge/platform-Linux-orange.svg)](https://www.linux.org/)
 [![Privilege Model](https://img.shields.io/badge/privileges-root%20for%20network%20only-yellow.svg)](https://en.wikipedia.org/wiki/Superuser)
 
 <p align="center">
@@ -339,7 +338,7 @@ This log includes detailed debug information and full stack traces, which is hig
 
 - ✅ **Linux (all major distros)**: Arch, Ubuntu, Debian, Fedora, openSUSE, Manjaro, EndeavourOS, etc.
 - ✅ **X11 and Wayland**: Both session types supported
-- ✅ **Windows 10 / 11**: Phase 1 supported via SOCKS5 proxy binding — see [windows/README.md](windows/README.md)
+- 🔜 **Windows**: Planned for a future release
 
 ### System Requirements
 
@@ -373,21 +372,6 @@ This project is licensed under the MIT License - see the [LICENSE](license) file
 
 ---
 
-## 🪟 Windows Support
-
-InterMux now supports Windows 10 and 11 via a SOCKS5 proxy engine.
-See **[windows/README.md](windows/README.md)** for full installation and usage instructions.
-
-```
-windows/
-├── gui/app.py          ← GUI (same dark theme)
-├── cli.py              ← CLI (same commands)
-├── core/               ← Windows-specific engine
-└── intermux_windows.spec  ← PyInstaller → .exe
-```
-
----
-
 <div align="center">
-  <strong>Made with ❤️ for the Linux and Windows communities</strong>
+  <strong>Made with ❤️ for the Linux community</strong>
 </div>
