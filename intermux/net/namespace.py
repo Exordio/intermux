@@ -193,10 +193,10 @@ def active() -> list[State]:
             namespace=ns.name, interface=_guess_interface(ns, all_interfaces), subnet=ns.subnet, route="?",
             dns=dns.read_resolv_conf(ns.etc_dir), dns_auto=False,
         )
-        names = processes.in_namespace(ns.name)
+        in_namespace = processes.in_namespace(ns.name)
         running = {}
         for app in entry.apps:
-            pids = [pid for pid, (name, _) in names.items() if name == processes.process_name(app.path)]
+            pids = processes.app_pids(app.path, app.pid, in_namespace)
             if pids:
                 running[app.path] = pids
         entry.apps = [app for app in entry.apps if app.path in running]

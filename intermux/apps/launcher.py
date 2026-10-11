@@ -28,8 +28,11 @@ def unsupported_reason(app: str) -> str | None:
     return None
 
 
-def launch(app: str, ns: Namespace, iface: str, user: User, separate_profile: bool = False) -> None:
-    """Start the app inside the namespace, dropping root privileges to the invoking user."""
+def launch(app: str, ns: Namespace, iface: str, user: User, separate_profile: bool = False) -> int:
+    """Start the app inside the namespace, dropping root privileges to the invoking user.
+
+    Returns the pid of the sudo process (ip netns exec replaces itself with it); the app is its child.
+    """
     env = session_env(user)
 
     # A private TMPDIR keeps apps in different namespaces from finding each other through IPC sockets.
@@ -47,5 +50,6 @@ def launch(app: str, ns: Namespace, iface: str, user: User, separate_profile: bo
         app, *flags,
     ]
     log.debug("Launching: %s", " ".join(command))
-    subprocess.Popen(command, stdin=subprocess.DEVNULL, start_new_session=True)
+    process = subprocess.Popen(command, stdin=subprocess.DEVNULL, start_new_session=True)
     log.info("Started %s as %s in %s via %s", os.path.basename(app), user.name, ns.name, iface)
+    return process.pid

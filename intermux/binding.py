@@ -50,9 +50,9 @@ def bind(app: str, iface_name: str, user: User,
             processes.stop(pids)
 
     ns = namespace.setup(iface, dns_servers)
-    app = registry.App(path, separate_profile=choice is OnRunning.SEPARATE)
-    launcher.launch(path, ns, iface.name, user, separate_profile=app.separate_profile)
-    registry.add_app(ns.name, app)
+    separate = choice is OnRunning.SEPARATE
+    pid = launcher.launch(path, ns, iface.name, user, separate_profile=separate)
+    registry.add_app(ns.name, registry.App(path, separate, pid))
     return ns
 
 
@@ -65,7 +65,8 @@ def restart_app(state: State, path: str, user: User) -> None:
     """Stop the app and start it again in the same namespace with the same options."""
     app = next((app for app in state.entry.apps if app.path == path), registry.App(path))
     _terminate(state, state.running.get(path, []), force=False)
-    launcher.launch(path, state.ns, state.entry.interface, user, separate_profile=app.separate_profile)
+    pid = launcher.launch(path, state.ns, state.entry.interface, user, separate_profile=app.separate_profile)
+    registry.add_app(state.entry.namespace, registry.App(path, app.separate_profile, pid))
 
 
 def stop_all(state: State, force: bool = False) -> None:

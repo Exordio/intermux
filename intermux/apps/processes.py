@@ -7,13 +7,34 @@ import time
 from intermux.system.shell import IP, run
 
 
-def process_name(app: str) -> str:
-    """Name the kernel gives the app's process: the file name cut to 15 characters."""
-    return os.path.basename(app)[:15]
+def process_names(app: str) -> set[str]:
+    """Lowercased names the app's process may get: the kernel keeps 15 characters of the file name.
+
+    Launchers often run a binary with another name or case (/usr/bin/discord starts
+    .../Discord), so the target of a symlink counts as well.
+    """
+    return {os.path.basename(path)[:15].lower() for path in (app, os.path.realpath(app))}
 
 
 def running(app: str, uid: int) -> list[int]:
-    return [int(pid) for pid in run("pgrep", "-x", "-u", str(uid), process_name(app), check=False).split()]
+    pids = set()
+    for name in process_names(app):
+        pids.update(int(pid) for pid in run("pgrep", "-i", "-x", "-u", str(uid), name, check=False).split())
+    return sorted(pids)
+
+
+def app_pids(app: str, launcher_pid: int | None, processes: dict[int, tuple[str, int]]) -> list[int]:
+    """Main processes of an app in the namespace.
+
+    The app is the child of the sudo process InterMux started, whatever it calls
+    itself. Without that pid (the app was started by an older version, or sudo has
+    exited), processes named like the app are used, without their same-named children.
+    """
+    if launcher_pid in processes:
+        return [pid for pid, (_, parent) in processes.items() if parent == launcher_pid]
+    names = process_names(app)
+    return [pid for pid, (name, parent) in processes.items()
+            if name.lower() in names and processes.get(parent, ("",))[0].lower() not in names]
 
 
 def in_namespace(namespace: str) -> dict[int, tuple[str, int]]:

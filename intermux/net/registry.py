@@ -13,6 +13,8 @@ STATE_DIR = "/run/intermux"
 class App:
     path: str
     separate_profile: bool = False
+    pid: int | None = None
+    """sudo process the app was started from."""
 
 
 @dataclass
