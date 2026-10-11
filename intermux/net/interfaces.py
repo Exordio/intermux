@@ -6,13 +6,15 @@ from dataclasses import dataclass, field
 from intermux.system.shell import IP, run
 
 # Bridges and container/VM links have no way out of the host; veth also covers InterMux's own pairs.
-VIRTUAL_PREFIXES = ("veth", "br-", "docker", "tun", "tap", "virbr", "vmnet", "vboxnet")
+VIRTUAL_PREFIXES = ("veth", "br-", "docker", "virbr", "vmnet", "vboxnet")
+VPN_PREFIXES = ("tun", "tap", "wg", "ppp")
 
 _KINDS = (
     (("wl",), "Wi-Fi"),
     (("en", "eth"), "Ethernet"),
     (("usb",), "USB"),
     (("bnep", "bt"), "Bluetooth"),
+    (VPN_PREFIXES, "VPN"),
     (VIRTUAL_PREFIXES, "Virtual"),
 )
 
@@ -21,6 +23,7 @@ _KINDS = (
 class Interface:
     name: str
     up: bool
+    point_to_point: bool = False
     addresses: list[str] = field(default_factory=list)
     gateways: list[str] = field(default_factory=list)
 
@@ -47,6 +50,7 @@ def all_interfaces() -> list[Interface]:
         result.append(Interface(
             name=name,
             up="UP" in link.get("flags", []),
+            point_to_point="POINTOPOINT" in link.get("flags", []),
             addresses=[f"{a['local']}/{a['prefixlen']}" for a in link.get("addr_info", [])],
             gateways=gateways.get(name, []),
         ))

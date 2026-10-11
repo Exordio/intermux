@@ -112,10 +112,11 @@ def setup(iface: Interface) -> Namespace:
 
     # Without its own table the namespace traffic would leave through the host's default route.
     # iif keeps the host's own replies to the namespace (source 10.0.N.1) in the main table.
-    if iface.gateways:
-        run(IP, "route", "add", "default", "via", iface.gateways[0], "dev", iface.name, "table", ns.table)
+    route = _default_route(iface)
+    if route:
+        run(IP, "route", "add", "default", *route, "table", ns.table)
         run(IP, "rule", "add", "from", ns.subnet, "iif", ns.host_veth, "table", ns.table, "priority", ns.priority)
-        log.info("Routing %s via %s (%s, table %s)", ns.subnet, iface.name, iface.gateways[0], ns.table)
+        log.info("Routing %s %s (table %s)", ns.subnet, " ".join(route), ns.table)
     else:
         log.warning("%s has no gateway, %s will use the host's default route", iface.name, ns.name)
 
@@ -147,6 +148,15 @@ def reset() -> None:
                 run(IP, "route", "flush", "table", str(table), check=False)
                 _delete_rules(lambda rule: f"-s 10.0.{octet}.0/24" in rule and "MASQUERADE" in rule)
     _drop_legacy_rt_tables()
+
+
+def _default_route(iface: Interface) -> list[str] | None:
+    if iface.gateways:
+        return ["via", iface.gateways[0], "dev", iface.name]
+    # Point-to-point links (tun, wg, ppp) have no next hop: the peer is the only way out.
+    if iface.point_to_point:
+        return ["dev", iface.name]
+    return None
 
 
 def _add_rule(ns: Namespace, table: str, chain: str, target: str, *matches: str) -> None:
