@@ -6,8 +6,8 @@ A Linux tool that runs an application so that all of its network traffic goes th
 
 This is a fork of [Rishi-Bhati/intermux](https://github.com/Rishi-Bhati/intermux). It runs on Linux only; Windows support is not planned in this fork and was removed by reverting the upstream commits that added it.
 
-![InterMux window](https://i.imgur.com/nRBznni.png)
-
+![InterMux window](https://i.imgur.com/RmaScAW.png)
+https://imgur.com/a/HEHiCZp
 ## How it works
 
 For every interface you pick, InterMux creates a separate network namespace and starts the application inside it:
