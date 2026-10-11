@@ -2,7 +2,7 @@
 
 pkgname=intermux-git
 _pkgname=intermux
-pkgver=2.0.0
+pkgver=.r65.g7863c86
 pkgrel=1
 pkgdesc="Run applications through a chosen network interface using network namespaces"
 arch=('any')
@@ -22,17 +22,18 @@ pkgver() {
   cd "$_pkgname"
   local version
   version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' intermux/__init__.py)
-  printf '%s.r%s.g%s' "$version" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+  printf '%s.r%s.g%s' "${version:-0}" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
 }
 
+# The system interpreter explicitly: an activated venv must not end up in the shebangs of /usr/bin/intermux*.
 build() {
   cd "$_pkgname"
-  python -m build --wheel --no-isolation
+  /usr/bin/python -m build --wheel --no-isolation
 }
 
 package() {
   cd "$_pkgname"
-  python -m installer --destdir="$pkgdir" dist/*.whl
+  /usr/bin/python -m installer --destdir="$pkgdir" dist/*.whl
   install -Dm644 packaging/intermux.desktop "$pkgdir/usr/share/applications/intermux.desktop"
   local size
   for size in 32 48 64 128 256 512; do
