@@ -87,7 +87,7 @@ Start it as a regular user: it restarts itself as root through `pkexec`, or thro
 Workflow:
 
 1. Pick an interface. The list contains only interfaces that are up and have an IPv4 address. "Refresh" updates it.
-2. Enter a command name from `PATH` (for example, `firefox`) or the full path to an executable. The drop-down list holds the last 20 apps started successfully; picking one also restores the interface and DNS it was started with. The history is kept in `~/.local/share/intermux/history.json` of your user.
+2. Enter a command name from `PATH` (for example, `firefox`) or the full path to an executable. The drop-down list holds the last 20 apps started successfully; picking one also restores the DNS it was started with. The history is kept in `~/.local/share/intermux/history.json` of your user.
 3. Choose DNS: `Auto`, one of the presets (Cloudflare, Google, Quad9), or type your own servers separated by commas. Press "Add" or Enter.
 4. Press "Assign" to start every application in the Pending table.
 

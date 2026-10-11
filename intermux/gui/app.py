@@ -272,13 +272,10 @@ class App:
         self.app_entry.delete(0, tk.END)
 
     def _restore_from_history(self) -> None:
-        """Picking an app from the history brings back the interface and DNS it was started with."""
+        """Picking an app from the history brings back the DNS it was started with."""
         item = self.history.find(self.app_entry.get())
-        if item is None:
-            return
-        if item.interface in self.iface_box["values"]:
-            self.iface_box.set(item.interface)
-        self.dns_box.set(item.dns)
+        if item:
+            self.dns_box.set(item.dns)
 
     def assign(self) -> None:
         if not self.pending:
@@ -292,7 +289,7 @@ class App:
                 messagebox.showerror(f"Cannot start {os.path.basename(app)}", str(exc))
                 continue
             if ns:
-                self.history.add(app, iface, ", ".join(servers) if servers else AUTO_DNS)
+                self.history.add(app, ", ".join(servers) if servers else AUTO_DNS)
         self.app_entry["values"] = self.history.apps
         self.clear()
         self.refresh_active()

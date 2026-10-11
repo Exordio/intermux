@@ -1,4 +1,4 @@
-"""Recently started apps with the interface and DNS they were started with, kept in the user's home."""
+"""Recently started apps with the DNS they were started with, kept in the user's home."""
 
 from __future__ import annotations
 
@@ -17,7 +17,6 @@ LIMIT = 20
 @dataclass
 class Item:
     app: str
-    interface: str
     dns: str
 
 
@@ -34,8 +33,8 @@ class History:
     def find(self, app: str) -> Item | None:
         return next((item for item in self.items if item.app == app), None)
 
-    def add(self, app: str, interface: str, dns: str) -> None:
-        self.items = ([Item(app, interface, dns)] + [item for item in self.items if item.app != app])[:LIMIT]
+    def add(self, app: str, dns: str) -> None:
+        self.items = ([Item(app, dns)] + [item for item in self.items if item.app != app])[:LIMIT]
         try:
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
             with open(self.path, "w") as f:
@@ -47,6 +46,6 @@ class History:
     def _load(self) -> list[Item]:
         try:
             with open(self.path) as f:
-                return [Item(**item) for item in json.load(f)][:LIMIT]
-        except (OSError, ValueError, TypeError):
+                return [Item(item["app"], item["dns"]) for item in json.load(f)][:LIMIT]
+        except (OSError, ValueError, TypeError, KeyError):
             return []
