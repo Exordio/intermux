@@ -9,7 +9,7 @@ from intermux.apps import firefox
 from intermux.net.namespace import Namespace
 from intermux.system.session import session_env
 from intermux.system.shell import IP
-from intermux.system.users import User
+from intermux.system.users import User, give_to
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +51,18 @@ def launch(app: str, ns: Namespace, iface: str, user: User, separate_profile: bo
         app, *flags,
     ]
     log.debug("Launching: %s", " ".join(command))
-    process = subprocess.Popen(command, stdin=subprocess.DEVNULL, start_new_session=True)
-    log.info("Started %s as %s in %s via %s", os.path.basename(app), user.name, ns.name, iface)
+    # The app must not write to InterMux's terminal: it goes away when InterMux exits, and apps
+    # that do not expect EIO on stdout (Electron ones, for instance) crash on the next write.
+    output_path = app_log_path(app, user)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, "w") as output:
+        process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
+                                   start_new_session=True)
+    give_to(user, output_path)
+    log.info("Started %s as %s in %s via %s, output in %s",
+             os.path.basename(app), user.name, ns.name, iface, output_path)
     return process.pid
+
+
+def app_log_path(app: str, user: User) -> str:
+    return os.path.join(user.data_dir, "apps", f"{os.path.basename(app)}.log")

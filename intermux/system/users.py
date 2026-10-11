@@ -16,6 +16,11 @@ class User:
     def runtime_dir(self) -> str:
         return f"/run/user/{self.uid}"
 
+    @property
+    def data_dir(self) -> str:
+        """Where InterMux keeps the user's history and app logs."""
+        return os.path.join(self.home, ".local", "share", "intermux")
+
 
 def invoking_user() -> User:
     """The real user behind pkexec or sudo. Apps are launched as this user, never as root."""

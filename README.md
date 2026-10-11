@@ -271,6 +271,8 @@ PRIORITY_BASE = 500  # ip rule priority = PRIORITY_BASE + N (501–753)
 
 The CLI and the GUI write a detailed log (DEBUG level, every executed command, stack traces) to `~/.local/share/intermux/intermux.log` of the user the process runs as. After elevation this is usually root, so `/root/.local/share/intermux/intermux.log`.
 
+The output of every app started through InterMux goes to `~/.local/share/intermux/apps/<app>.log` of your user; the file is overwritten on every start. Apps do not write to the terminal InterMux runs in, so closing InterMux or its terminal does not affect them.
+
 If an interface is not listed, check that it is up and has an IPv4 address:
 
 ```bash

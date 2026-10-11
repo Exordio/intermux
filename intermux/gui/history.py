@@ -23,7 +23,7 @@ class Item:
 class History:
     def __init__(self, user: User):
         self.user = user
-        self.path = os.path.join(user.home, ".local", "share", "intermux", "history.json")
+        self.path = os.path.join(user.data_dir, "history.json")
         self.items = self._load()
 
     @property
