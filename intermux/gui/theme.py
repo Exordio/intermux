@@ -27,7 +27,7 @@ def apply(root: tk.Tk) -> None:
     style.configure("TEntry", fieldbackground=FIELD, foreground=FG, insertcolor=FG)
     style.configure("TCombobox", fieldbackground=FIELD, background=BUTTON, foreground=FG, arrowcolor=FG, insertcolor=FG)
     style.configure("Treeview", background=FIELD, fieldbackground=FIELD, foreground=FG, font=FONT, rowheight=22)
-    style.configure("Treeview.Heading", background=BUTTON, foreground=FG, font=FONT)
+    style.configure("Treeview.Heading", background=BUTTON, foreground=FG, font=FONT, padding=(5, 2))
     style.map("Treeview", background=[("selected", SELECTION)], foreground=[("selected", "#ffffff")])
     style.map("TCombobox",
               fieldbackground=[("readonly", FIELD)], foreground=[("readonly", FG)],
