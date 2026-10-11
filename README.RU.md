@@ -74,7 +74,22 @@ python3 -m intermux check
 
 Все команды запускаются из корня репозитория. Если вы используете venv, Python в нём должен быть собран с `tkinter`.
 
-### Установка в систему
+### Пакет для Arch Linux
+
+`packaging/arch/PKGBUILD` собирает пакет `intermux-git` из репозитория на GitHub (из последнего отправленного туда коммита):
+
+```bash
+cd packaging/arch
+makepkg -si
+```
+
+Пакет устанавливает код в системный Python (`/usr/lib/python3.*/site-packages`), команды `intermux` и `intermux-gui` — в `/usr/bin`, а также пункт меню, иконки и лицензию. Удаление — `sudo pacman -R intermux-git`, обновление — повторный `makepkg -si`.
+
+Проект — обычный Python-пакет (`pyproject.toml`), поэтому пакеты для других дистрибутивов собираются так же: `python -m build --wheel` и `python -m installer --destdir=...`, плюс `packaging/intermux.desktop` и иконки из `intermux/gui/icons`.
+
+### Установка скриптом
+
+На других дистрибутивах или чтобы установить текущую копию как есть:
 
 ```bash
 sudo ./install.sh
@@ -244,8 +259,10 @@ Unix-сокеты с путём в файловой системе (сокеты
 ## Структура проекта
 
 ```
-install.sh              # Установка в систему, см. выше
+pyproject.toml          # Описание Python-пакета, версия — в intermux/__init__.py
+install.sh              # Установка без пакета, см. выше
 packaging/
+├── arch/PKGBUILD       # Пакет для Arch Linux
 └── intermux.desktop    # Пункт меню приложений
 intermux/
 ├── __main__.py         # python3 -m intermux → cli.main()

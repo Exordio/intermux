@@ -74,7 +74,22 @@ python3 -m intermux check
 
 All commands are run from the repository root. If you use a venv, its Python must be built with `tkinter`.
 
-### Installing into the system
+### Arch Linux package
+
+`packaging/arch/PKGBUILD` builds the `intermux-git` package from the GitHub repository (the latest pushed commit):
+
+```bash
+cd packaging/arch
+makepkg -si
+```
+
+The package puts the code into the system Python (`/usr/lib/python3.*/site-packages`), the `intermux` and `intermux-gui` commands into `/usr/bin`, and adds the menu entry, the icons and the license. Remove it with `sudo pacman -R intermux-git`. To update, run `makepkg -si` again.
+
+The project is a standard Python package (`pyproject.toml`), so packages for other distributions are built the same way: `python -m build --wheel` and `python -m installer --destdir=...`, plus `packaging/intermux.desktop` and the icons from `intermux/gui/icons`.
+
+### Installing with the script
+
+On other distributions, or to install the current checkout as it is:
 
 ```bash
 sudo ./install.sh
@@ -244,8 +259,10 @@ If the VPN client sets a route through a gateway (`default via 10.8.0.1 dev tun0
 ## Project layout
 
 ```
-install.sh              # System installation, see above
+pyproject.toml          # Python package metadata, version in intermux/__init__.py
+install.sh              # Installation without a package, see above
 packaging/
+├── arch/PKGBUILD       # Arch Linux package
 └── intermux.desktop    # Application menu entry
 intermux/
 ├── __main__.py         # python3 -m intermux → cli.main()

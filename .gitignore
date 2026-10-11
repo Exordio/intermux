@@ -1,3 +1,8 @@
 *pycache*
 venv
 .venv
+build/
+dist/
+*.egg-info/
+packaging/arch/*
+!packaging/arch/PKGBUILD

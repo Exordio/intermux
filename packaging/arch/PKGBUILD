@@ -1,0 +1,43 @@
+# Maintainer: Exord
+
+pkgname=intermux-git
+_pkgname=intermux
+pkgver=2.0.0
+pkgrel=1
+pkgdesc="Run applications through a chosen network interface using network namespaces"
+arch=('any')
+url="https://github.com/Exordio/intermux"
+license=('MIT')
+depends=('python' 'tk' 'iproute2' 'iptables' 'sudo')
+makedepends=('git' 'python-build' 'python-installer' 'python-setuptools' 'python-wheel')
+optdepends=('polkit: password prompt when the GUI is started from the application menu'
+            'xorg-xhost: GUI on X11 sessions'
+            'conntrack-tools: drop open flows when a namespace is moved to another interface')
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+source=("$_pkgname::git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  local version
+  version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' intermux/__init__.py)
+  printf '%s.r%s.g%s' "$version" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+build() {
+  cd "$_pkgname"
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd "$_pkgname"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+  install -Dm644 packaging/intermux.desktop "$pkgdir/usr/share/applications/intermux.desktop"
+  local size
+  for size in 32 48 64 128 256 512; do
+    install -Dm644 "intermux/gui/icons/intermux-$size.png" \
+      "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/intermux.png"
+  done
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
