@@ -15,7 +15,7 @@ For every interface you pick, InterMux creates a separate network namespace and 
 1. A namespace `ns_<hash>` is created, where `<hash>` is the first 8 characters of the MD5 of the interface name. All other names and numbers are derived from the same hash. If the name or the subnet is already taken (for example, a namespace was moved to another interface), the hash of `<interface>#1`, `#2` and so on is used instead. If a namespace for the interface already exists, it is reused: steps 1–2 are skipped, steps 3–5 are done again, and apps already running in it keep their network.
 2. A veth pair (`veth0_<hash>` / `veth1_<hash>`) connects the namespace to the host. The namespace gets the subnet `10.0.N.0/24`, the host end gets `10.0.N.1`, the namespace end `10.0.N.2`.
 3. On the host, `net.ipv4.ip_forward` is enabled, a `MASQUERADE` rule for the subnet on the selected interface is added, together with two `FORWARD` rules that allow traffic only between this veth and this interface. All rules carry the comment `intermux:ns_<hash>`.
-4. Policy routing: packets coming from the namespace veth get their own routing table `200 + N` with a default route through the selected interface, selected by the rule `ip rule from 10.0.N.0/24 iif veth0_<hash>` with priority `500 + N`. Without it the traffic would leave through the host's default route. If the interface has a gateway, the route goes through it (`via <gateway>`); point-to-point interfaces without a gateway (WireGuard, some OpenVPN setups, PPP) get a route straight into the interface (`dev <interface>`). The same table always holds a fallback `unreachable default` route with metric 4096: if the interface goes away (VPN disconnected, Wi-Fi lost), the kernel removes its route and the namespace traffic hits the fallback instead of leaving through the host's default route.
+4. Policy routing: packets coming from the namespace veth get their own routing table `10000 + N` with a default route through the selected interface, selected by the rule `ip rule from 10.0.N.0/24 iif veth0_<hash>` with priority `500 + N`. Without it the traffic would leave through the host's default route. If the interface has a gateway, the route goes through it (`via <gateway>`); point-to-point interfaces without a gateway (WireGuard, some OpenVPN setups, PPP) get a route straight into the interface (`dev <interface>`). The same table always holds a fallback `unreachable default` route with metric 4096: if the interface goes away (VPN disconnected, Wi-Fi lost), the kernel removes its route and the namespace traffic hits the fallback instead of leaving through the host's default route.
 5. The namespace DNS servers are written to `/etc/netns/ns_<hash>/resolv.conf`: the ones you chose or picked automatically (see [DNS](#dns)).
 6. The application is started with `ip netns exec ... sudo -u <user> env -i ...`, that is as your regular user, not as root, and with the environment of your desktop session: the one KDE, GNOME and others give to apps they start themselves (`systemctl --user show-environment`; without systemd, the environment of one of your graphical processes). So the app sees your profile, display, audio, D-Bus and portals, and nothing of `sudo` leaks into it. `TMPDIR` points to a separate directory under `/run/user/<uid>`, so apps in different namespaces do not find each other through IPC sockets.
 
@@ -263,7 +263,7 @@ intermux/
 Routing table numbers and rule priorities are set in `intermux/net/namespace.py`:
 
 ```python
-TABLE_BASE = 200     # namespace table = TABLE_BASE + N (201–453)
+TABLE_BASE = 10000   # namespace table = TABLE_BASE + N (10001–10253)
 PRIORITY_BASE = 500  # ip rule priority = PRIORITY_BASE + N (501–753)
 ```
 
@@ -283,7 +283,7 @@ If an app has no internet access:
 ```bash
 python3 -m intermux check
 python3 -m intermux status               # namespace state, interface, route and DNS
-ip route show table <200 + N>            # route through the interface and the unreachable fallback
+ip route show table <10000 + N>          # route through the interface and the unreachable fallback
 sysctl net.ipv4.ip_forward               # must be 1
 sudo iptables -t nat -S POSTROUTING      # MASQUERADE rule for 10.0.N.0/24
 ip rule show                             # rule from 10.0.N.0/24 iif veth0_<hash>

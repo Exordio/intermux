@@ -20,8 +20,11 @@ from intermux.system.shell import IP, IPTABLES, SYSCTL, CommandError, run, which
 log = logging.getLogger(__name__)
 
 NETNS_ETC = "/etc/netns"
-TABLE_BASE = 200
+TABLE_BASE = 10000
 PRIORITY_BASE = 500
+# Older versions used table 200 + N, which for N = 53..55 is default, main or local: those are never flushed.
+_LEGACY_TABLE_BASE = 200
+_RESERVED_TABLES = {0, 253, 254, 255}
 FALLBACK_METRIC = "4096"
 
 CONNECTED = "connected"
@@ -30,7 +33,8 @@ INTERFACE_DOWN = "interface down"
 INTERFACE_MISSING = "interface missing"
 
 _NAME = re.compile(r"^ns_([0-9a-f]{8})$")
-_POLICY_RULE = re.compile(r"^(\d+):\s+from 10\.0\.(\d+)\.0/24 .*lookup (\d+)")
+_POLICY_RULE = re.compile(r"^(\d+):\s+from 10\.0\.(\d+)\.0/24 .*lookup (\S+)")
+_TABLE_NAMES = {"default": 253, "main": 254, "local": 255}
 _LEGACY_RT_TABLES = ("/etc/iproute2/rt_tables", "/usr/share/iproute2/rt_tables")
 
 
@@ -272,10 +276,11 @@ def reset() -> None:
     for line in run(IP, "rule", "show", check=False).splitlines():
         match = _POLICY_RULE.match(line)
         if match:
-            priority, octet, table = map(int, match.groups())
-            if priority == PRIORITY_BASE + octet and table == TABLE_BASE + octet:
+            priority, octet = int(match.group(1)), int(match.group(2))
+            table = _TABLE_NAMES.get(match.group(3)) or int(match.group(3))
+            if priority == PRIORITY_BASE + octet and table in (TABLE_BASE + octet, _LEGACY_TABLE_BASE + octet):
                 run(IP, "rule", "del", "priority", str(priority), check=False)
-                run(IP, "route", "flush", "table", str(table), check=False)
+                _flush_table(table)
                 _delete_rules(lambda rule: f"-s 10.0.{octet}.0/24" in rule and "MASQUERADE" in rule)
     _drop_legacy_rt_tables()
 
@@ -344,9 +349,15 @@ def _wire(ns: Namespace, iface: Interface) -> list[str] | None:
 
 def _unwire(ns: Namespace) -> None:
     run(IP, "rule", "del", "priority", ns.priority, check=False)
-    run(IP, "route", "flush", "table", ns.table, check=False)
+    _flush_table(int(ns.table))
+    _flush_table(_LEGACY_TABLE_BASE + ns.octet)
     # Older versions added MASQUERADE rules without a comment.
     _delete_rules(lambda rule: ns.comment in rule or (f"-s {ns.subnet}" in rule and "MASQUERADE" in rule))
+
+
+def _flush_table(table: int) -> None:
+    if table not in _RESERVED_TABLES:
+        run(IP, "route", "flush", "table", str(table), check=False)
 
 
 def _apply_dns(ns: Namespace, iface: Interface | None, servers: list[str] | None) -> tuple[list[str], bool]:
@@ -392,7 +403,7 @@ def _drop_legacy_rt_tables() -> None:
             parts = line.split()
             if len(parts) == 2 and parts[0].isdigit() and parts[1].endswith("_rt"):
                 run(IP, "rule", "del", "table", parts[0], check=False)
-                run(IP, "route", "flush", "table", parts[0], check=False)
+                _flush_table(int(parts[0]))
             else:
                 kept.append(line)
         if len(kept) != len(lines):
