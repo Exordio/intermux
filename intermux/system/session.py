@@ -1,11 +1,13 @@
-"""Environment an app needs to reach the user's display, audio and D-Bus session."""
+"""Environment of the user's desktop session for the apps InterMux starts."""
 
 from __future__ import annotations
 
+import codecs
 import os
 import subprocess
 from pathlib import Path
 
+from intermux.system.shell import run
 from intermux.system.users import User
 
 SESSION_VARS = (
@@ -14,30 +16,34 @@ SESSION_VARS = (
 )
 
 
-def session_env(user: User) -> dict[str, str]:
-    env = {name: os.environ[name] for name in SESSION_VARS if os.environ.get(name)}
+# Shell bookkeeping of whatever process the environment was taken from.
+_DROPPED = ("PWD", "OLDPWD", "SHLVL", "_")
 
-    # sudo and pkexec may strip these, so borrow them from the user's own processes.
-    if "DISPLAY" not in env and "WAYLAND_DISPLAY" not in env:
-        env.update(_from_user_processes(user.uid, ("DISPLAY", "WAYLAND_DISPLAY", "XDG_SESSION_TYPE")))
-    if "DBUS_SESSION_BUS_ADDRESS" not in env:
-        env.update(_from_user_processes(user.uid, ("DBUS_SESSION_BUS_ADDRESS",)))
+
+def session_env(user: User) -> dict[str, str]:
+    """The environment the desktop gives to apps it starts itself.
+
+    Apps need more than the display: portals and toolkits look at XDG_CURRENT_DESKTOP,
+    XDG_SESSION_TYPE, XDG_DATA_DIRS, LANG and so on. sudo and pkexec strip all of it,
+    so it comes from the systemd user manager, which desktops keep up to date, or
+    from a graphical process of the user. The variables InterMux was started with win.
+    """
+    env = _systemd_user_env(user) or _graphical_process_env(user.uid)
+    env.update({name: os.environ[name] for name in SESSION_VARS if os.environ.get(name)})
+    for name in _DROPPED:
+        env.pop(name, None)
 
     runtime = user.runtime_dir
     env["XDG_RUNTIME_DIR"] = runtime
+    # Wayland sessions have DISPLAY too (XWayland), so WAYLAND_DISPLAY decides.
     if "XDG_SESSION_TYPE" not in env:
-        if "DISPLAY" in env:
-            env["XDG_SESSION_TYPE"] = "x11"
-        elif "WAYLAND_DISPLAY" in env:
+        if "WAYLAND_DISPLAY" in env:
             env["XDG_SESSION_TYPE"] = "wayland"
-    if "WAYLAND_DISPLAY" in env and not env["WAYLAND_DISPLAY"].startswith("/"):
-        env["WAYLAND_DISPLAY"] = f"{runtime}/{env['WAYLAND_DISPLAY']}"
-
+        elif "DISPLAY" in env:
+            env["XDG_SESSION_TYPE"] = "x11"
     _set_first_existing(env, "XAUTHORITY", os.path.join(user.home, ".Xauthority"), f"{runtime}/Xauthority")
-    _set_first_existing(env, "PULSE_SERVER", f"{runtime}/pulse/native", prefix="unix:")
-    _set_first_existing(env, "PIPEWIRE_REMOTE", f"{runtime}/pipewire-0")
     env["HOME"] = user.home
-    env["USER"] = user.name
+    env["USER"] = env["LOGNAME"] = user.name
     return env
 
 
@@ -60,17 +66,32 @@ def allow_root_on_display(user: User, env: dict[str, str]) -> None:
         pass
 
 
-def _set_first_existing(env: dict[str, str], name: str, *paths: str, prefix: str = "") -> None:
+def _set_first_existing(env: dict[str, str], name: str, *paths: str) -> None:
     if name in env:
         return
     for path in paths:
         if os.path.exists(path):
-            env[name] = prefix + path
+            env[name] = path
             return
 
 
-def _from_user_processes(uid: int, names: tuple[str, ...]) -> dict[str, str]:
-    found: dict[str, str] = {}
+def _systemd_user_env(user: User) -> dict[str, str]:
+    command = ["systemctl", "--user", "show-environment"]
+    if os.getuid() != user.uid:
+        command = ["sudo", "-u", user.name, "env", f"XDG_RUNTIME_DIR={user.runtime_dir}", *command]
+    env = {}
+    for line in run(*command, check=False, timeout=3).splitlines():
+        name, sep, value = line.partition("=")
+        if sep:
+            # Values with special characters are printed as $'...' with C escapes.
+            if value.startswith("$'") and value.endswith("'"):
+                value = codecs.decode(value[2:-1].encode("latin-1", "backslashreplace"), "unicode_escape")
+            env[name] = value
+    return env if "DISPLAY" in env or "WAYLAND_DISPLAY" in env else {}
+
+
+def _graphical_process_env(uid: int) -> dict[str, str]:
+    """Whole environment of the first process of the user that has a display."""
     for proc in Path("/proc").iterdir():
         if not proc.name.isdigit():
             continue
@@ -80,10 +101,7 @@ def _from_user_processes(uid: int, names: tuple[str, ...]) -> dict[str, str]:
             data = (proc / "environ").read_bytes()
         except OSError:
             continue
-        for item in data.split(b"\0"):
-            key, sep, value = item.decode(errors="replace").partition("=")
-            if sep and key in names and key not in found:
-                found[key] = value
-        if len(found) == len(names):
-            break
-    return found
+        env = dict(item.decode(errors="replace").partition("=")[::2] for item in data.split(b"\0") if b"=" in item)
+        if "DISPLAY" in env or "WAYLAND_DISPLAY" in env:
+            return env
+    return {}

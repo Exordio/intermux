@@ -46,7 +46,8 @@ def launch(app: str, ns: Namespace, iface: str, user: User, separate_profile: bo
     command = [
         IP, "netns", "exec", ns.name,
         "sudo", "-u", user.name,
-        "env", *(f"{key}={value}" for key, value in env.items()),
+        # -i: exactly the session environment, without what sudo adds (SUDO_*, its PATH).
+        "env", "-i", *(f"{key}={value}" for key, value in env.items()),
         app, *flags,
     ]
     log.debug("Launching: %s", " ".join(command))

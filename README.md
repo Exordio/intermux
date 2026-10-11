@@ -17,7 +17,7 @@ For every interface you pick, InterMux creates a separate network namespace and 
 3. On the host, `net.ipv4.ip_forward` is enabled, a `MASQUERADE` rule for the subnet on the selected interface is added, together with two `FORWARD` rules that allow traffic only between this veth and this interface. All rules carry the comment `intermux:ns_<hash>`.
 4. Policy routing: packets coming from the namespace veth get their own routing table `200 + N` with a default route through the selected interface, selected by the rule `ip rule from 10.0.N.0/24 iif veth0_<hash>` with priority `500 + N`. Without it the traffic would leave through the host's default route. If the interface has a gateway, the route goes through it (`via <gateway>`); point-to-point interfaces without a gateway (WireGuard, some OpenVPN setups, PPP) get a route straight into the interface (`dev <interface>`). The same table always holds a fallback `unreachable default` route with metric 4096: if the interface goes away (VPN disconnected, Wi-Fi lost), the kernel removes its route and the namespace traffic hits the fallback instead of leaving through the host's default route.
 5. The namespace DNS servers are written to `/etc/netns/ns_<hash>/resolv.conf`: the ones you chose or picked automatically (see [DNS](#dns)).
-6. The application is started with `ip netns exec ... sudo -u <user>`, that is as your regular user, not as root. `DISPLAY`/`WAYLAND_DISPLAY`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS`, the PulseAudio/PipeWire sockets and `HOME` are passed along, so the app sees your profile, your graphical session and your audio. `TMPDIR` points to a separate directory under `/run/user/<uid>`, so apps in different namespaces do not find each other through IPC sockets.
+6. The application is started with `ip netns exec ... sudo -u <user> env -i ...`, that is as your regular user, not as root, and with the environment of your desktop session: the one KDE, GNOME and others give to apps they start themselves (`systemctl --user show-environment`; without systemd, the environment of one of your graphical processes). So the app sees your profile, display, audio, D-Bus and portals, and nothing of `sudo` leaks into it. `TMPDIR` points to a separate directory under `/run/user/<uid>`, so apps in different namespaces do not find each other through IPC sockets.
 
 Root is needed only for the network setup (steps 1–5).
 
@@ -195,6 +195,12 @@ Interfaces that cannot lead outside the machine are hidden:
 - `docker*`, `br-*`, `virbr*`, `vboxnet*`, `vmnet*` — Docker, libvirt, VirtualBox and VMware bridges. They connect the host to containers and virtual machines and have no route outside.
 
 The filter works by name prefix; `list` in the CLI uses the same list. To hide or show other interfaces, edit `VIRTUAL_PREFIXES` in `intermux/net/interfaces.py`.
+
+### Wayland
+
+The InterMux window itself is a Tk app and runs through XWayland. Apps started through it get the full session environment, including `WAYLAND_DISPLAY` and `XDG_SESSION_TYPE=wayland`, so native Wayland apps work, and screen sharing goes through xdg-desktop-portal and PipeWire just as for apps started from the desktop.
+
+Unix sockets with a file path (the Wayland, X11, D-Bus and PipeWire sockets in `/run/user/<uid>` and `/tmp/.X11-unix`) work from inside a namespace. Abstract unix sockets belong to a network namespace and do not: an app that reaches a service only through an abstract socket (for example, a D-Bus address of the form `unix:abstract=...`) will not reach it.
 
 ### VPN
 
