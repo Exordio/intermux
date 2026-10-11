@@ -74,6 +74,22 @@ python3 -m intermux check
 
 All commands are run from the repository root. If you use a venv, its Python must be built with `tkinter`.
 
+### Installing into the system
+
+```bash
+sudo ./install.sh
+```
+
+The script installs from the current checkout:
+
+- the code to `/opt/intermux`, owned by root: the GUI runs as root, so the code it runs must not be writable by a regular user;
+- the `intermux` (CLI) and `intermux-gui` commands to `/usr/local/bin`;
+- the InterMux entry to the application menu (`/usr/local/share/applications/intermux.desktop`) and its icon to `/usr/local/share/icons/hicolor`.
+
+After that start the GUI from the application menu or with `intermux-gui`, and use `intermux` instead of `python3 -m intermux` (for example, `sudo intermux assign --app firefox --iface wlan0`). Started from the menu, the GUI asks for the password through polkit (`pkexec`), which KDE, GNOME and other desktops provide; without `pkexec` it has to be started from a terminal, where `sudo` can ask for the password.
+
+To update, pull the changes and run `sudo ./install.sh` again. To remove, run `sudo ./install.sh --uninstall`; per-user history and app logs in `~/.local/share/intermux` are kept. `PREFIX` (default `/usr/local`) and `TARGET` (default `/opt/intermux`) can be overridden from the environment.
+
 ## Usage
 
 ### GUI
@@ -228,6 +244,9 @@ If the VPN client sets a route through a gateway (`default via 10.8.0.1 dev tun0
 ## Project layout
 
 ```
+install.sh              # System installation, see above
+packaging/
+└── intermux.desktop    # Application menu entry
 intermux/
 ├── __main__.py         # python3 -m intermux → cli.main()
 ├── cli.py              # Command line interface
@@ -255,6 +274,7 @@ intermux/
     ├── app.py          # Main window
     ├── dialogs.py      # "Application is running" dialog
     ├── history.py      # Recently started apps for the App / Path field
+    ├── icons/          # Application icon, 32 to 512 px
     └── theme.py        # Tk colors and styles
 ```
 

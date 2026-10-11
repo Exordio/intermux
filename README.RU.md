@@ -74,6 +74,22 @@ python3 -m intermux check
 
 Все команды запускаются из корня репозитория. Если вы используете venv, Python в нём должен быть собран с `tkinter`.
 
+### Установка в систему
+
+```bash
+sudo ./install.sh
+```
+
+Скрипт устанавливает InterMux из текущей копии репозитория:
+
+- код — в `/opt/intermux`, владелец root: GUI работает от root, поэтому исполняемый им код не должен быть доступен для записи обычному пользователю;
+- команды `intermux` (CLI) и `intermux-gui` — в `/usr/local/bin`;
+- пункт InterMux в меню приложений (`/usr/local/share/applications/intermux.desktop`) и его иконку — в `/usr/local/share/icons/hicolor`.
+
+После этого GUI запускается из меню приложений или командой `intermux-gui`, а вместо `python3 -m intermux` используется `intermux` (например, `sudo intermux assign --app firefox --iface wlan0`). При запуске из меню GUI запрашивает пароль через polkit (`pkexec`), который есть в KDE, GNOME и других окружениях; без `pkexec` его нужно запускать из терминала, где пароль запросит `sudo`.
+
+Для обновления получите изменения и снова выполните `sudo ./install.sh`. Для удаления — `sudo ./install.sh --uninstall`; история и логи приложений в `~/.local/share/intermux` пользователей сохраняются. `PREFIX` (по умолчанию `/usr/local`) и `TARGET` (по умолчанию `/opt/intermux`) можно переопределить через окружение.
+
 ## Использование
 
 ### GUI
@@ -228,6 +244,9 @@ Unix-сокеты с путём в файловой системе (сокеты
 ## Структура проекта
 
 ```
+install.sh              # Установка в систему, см. выше
+packaging/
+└── intermux.desktop    # Пункт меню приложений
 intermux/
 ├── __main__.py         # python3 -m intermux → cli.main()
 ├── cli.py              # Консольный интерфейс
@@ -255,6 +274,7 @@ intermux/
     ├── app.py          # Главное окно
     ├── dialogs.py      # Диалог «приложение уже запущено»
     ├── history.py      # История запущенных приложений для поля App / Path
+    ├── icons/          # Иконка приложения, от 32 до 512 px
     └── theme.py        # Цвета и стили Tk
 ```
 

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=InterMux
+GenericName=Per-app network interface
+Comment=Run applications through a chosen network interface
+Exec=intermux-gui
+Icon=intermux
+Terminal=false
+Categories=Network;
+Keywords=network;interface;namespace;vpn;dns;
+StartupWMClass=Intermux
