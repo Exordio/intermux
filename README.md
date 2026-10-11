@@ -1,196 +1,118 @@
-<div align="center">
+# InterMux
 
-# 🌐 InterMux
+Утилита для Linux, которая запускает приложение так, чтобы весь его сетевой трафик шёл через выбранный сетевой интерфейс. Например, браузер через Wi-Fi, а торрент-клиент через USB-модем или Ethernet.
 
-### Advanced Network Interface Management for Linux
+Это форк [Rishi-Bhati/intermux](https://github.com/Rishi-Bhati/intermux). Работает только под Linux, поддержка Windows в этом форке не планируется. Был проведен реверт для отмены поддержки винды. 
 
-[![Python Version](https://img.shields.io/badge/python-3.6%2B-blue.svg)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](https://opensource.org/license/mit)
-[![Platform](https://img.shields.io/badge/platform-Linux-orange.svg)](https://www.linux.org/)
-[![Privilege Model](https://img.shields.io/badge/privileges-root%20for%20network%20only-yellow.svg)](https://en.wikipedia.org/wiki/Superuser)
+## Принцип работы
 
-<p align="center">
-  <strong>Bind applications to specific network interfaces with ease</strong>
-</p>
+Для каждого выбранного интерфейса InterMux создаёт отдельное сетевое пространство имён (network namespace) и запускает приложение внутри него:
 
-[Features](#-features) • [Installation](#-installation) • [Usage](#-usage) • [Architecture](#-architecture) • [Contributing](#-contributing)
+1. Создаётся namespace `ns_<hash>`, где `<hash>` — первые 8 символов MD5 от имени интерфейса.
+2. Пара veth (`veth0_<hash>` / `veth1_<hash>`) соединяет namespace с основной системой. Namespace получает подсеть `10.0.N.0/24`, где N вычисляется из того же хэша.
+3. На хосте включается `net.ipv4.ip_forward`, добавляется правило `MASQUERADE` для этой подсети на выбранный интерфейс и правило `FORWARD -j ACCEPT`.
+4. Policy routing: для подсети namespace создаётся отдельная таблица маршрутизации (201–453) с маршрутом по умолчанию через шлюз выбранного интерфейса и правило `ip rule from 10.0.N.0/24`. Без этого шага трафик уходил бы через основной маршрут системы.
+5. В `/etc/netns/ns_<hash>/resolv.conf` записываются реальные DNS-серверы. Заглушка `127.0.0.53` от `systemd-resolved` внутри namespace не работает, поэтому адреса берутся из `resolvectl dns` или `/etc/resolv.conf`.
+6. Приложение запускается через `ip netns exec ... sudo -u <пользователь>`, то есть от имени обычного пользователя, а не root. В окружение передаются `DISPLAY`/`WAYLAND_DISPLAY`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS`, сокеты PulseAudio/PipeWire и `HOME`, поэтому приложение видит ваш профиль, графическую сессию и звук.
 
-</div>
+Права root нужны только для настройки сети (шаги 1–5).
 
----
+## Требования
 
-## 📋 Overview
+- Linux с поддержкой network namespaces (`CONFIG_NET_NS`, есть во всех распространённых дистрибутивах)
+- Python 3 с модулем `tkinter` (нужен только для GUI)
+- `iproute2`, `iptables`, `sudo`
+- `pkexec` (polkit) — для повышения прав из GUI; без него используется `sudo`
+- `xhost` — для доступа GUI, запущенного от root, к X-серверу
+- X11 или Wayland с XWayland (интерфейс написан на Tk)
 
-**InterMux** is a powerful Linux utility that enables you to bind applications to specific network interfaces. Whether you need to route your browser through Wi-Fi while keeping your development server on Ethernet, or isolate applications for security testing, InterMux makes it simple.
+Сторонние Python-пакеты не нужны: код использует только стандартную библиотеку.
 
-> **Privacy Note:** InterMux sets up network namespaces as root, but **launches all applications as your regular user** — your bookmarks, cookies, and app settings are always preserved.
+### Установка зависимостей
 
-### 🎯 Use Cases
-
-- **Multi-WAN Management**: Route different applications through different internet connections
-- **Network Testing**: Test applications on specific network interfaces
-- **Security Isolation**: Isolate applications in separate network namespaces
-- **Bandwidth Management**: Control which apps use which network connections
-- **Development**: Test network-dependent applications across different interfaces
-
-
-## 💡 Why I Made It
-
-I was downloading a large file via torrent, and while waiting, I opened YouTube to pass the time.
-But the videos were stuck on low quality, buffering like crazy — even though my connection showed 300 Mbps.
-
-Turns out, the torrent was consuming all the bandwidth, and YouTube was left starving.
-That’s when I had the idea: “What if I could assign different apps to different networks?”
-
-After some research, I found that while Linux supports advanced networking, there wasn’t a simple tool to do what I needed — especially one that was GUI-friendly and straightforward.
-
-So I built InterMux:
-A utility that lets me bind any app to a specific interface with ease — no messy configs, no guesswork, just full control.
-
-## ✨ Features
-
-<table>
-<tr>
-<td>
-
-### 🖥️ Core Features
-- 🔍 **Auto-detection** of all network interfaces
-- 🛣️ **Custom routing tables** per interface
-- 🔒 **Network namespace isolation**
-- 📊 **Real-time interface monitoring**
-- 🎛️ **Both CLI and GUI interfaces**
-- 👤 **User-preserving** — apps keep your profile & data
-
-</td>
-<td>
-
-### 🌟 Interface Support
-- 📶 **Wi-Fi** (wlan*, wl*)
-- 🔌 **Ethernet** (eth*, en*)
-- 📱 **USB Tethering**
-- 🔵 **Bluetooth Tethering**
-- 🌐 **Virtual Interfaces**
-
-</td>
-</tr>
-</table>
-
-## 🚀 Installation
-
-### Prerequisites
-
-<details>
-<summary><strong>Ubuntu / Debian / Mint</strong></summary>
+Debian / Ubuntu / Mint:
 
 ```bash
-sudo apt update
-sudo apt install -y python3 python3-pip iproute2 iptables policykit-1 x11-xserver-utils
-```
-</details>
-
-<details>
-<summary><strong>Arch / EndeavourOS / Manjaro</strong></summary>
-
-```bash
-sudo pacman -S python python-pip iproute2 iptables polkit xorg-xhost
-```
-</details>
-
-<details>
-<summary><strong>Fedora / RHEL / Rocky</strong></summary>
-
-```bash
-sudo dnf install -y python3 python3-pip iproute iptables polkit xorg-x11-server-utils
-```
-</details>
-
-<details>
-<summary><strong>openSUSE</strong></summary>
-
-```bash
-sudo zypper install python3 python3-pip iproute2 iptables polkit xorg-x11-xhost
-```
-</details>
-
-- Note for Ubuntu 24.04+ users: Some Python modules (like brotli) may require system-level installation.
-
-```bash
-# If pip fails
-sudo apt install python3-brotli
+sudo apt install python3 python3-tk iproute2 iptables sudo pkexec x11-xserver-utils
 ```
 
-### Clone and Setup
+На старых версиях Debian/Ubuntu вместо `pkexec` используйте пакет `policykit-1`.
+
+Arch / Manjaro / EndeavourOS:
 
 ```bash
-# Clone the repository
-git clone https://github.com/Rishi-Bhati/intermux.git
+sudo pacman -S python tk iproute2 iptables sudo polkit xorg-xhost
+```
+
+Fedora / RHEL / Rocky:
+
+```bash
+sudo dnf install python3 python3-tkinter iproute iptables sudo polkit xhost
+```
+
+openSUSE:
+
+```bash
+sudo zypper install python3 python3-tk iproute2 iptables sudo polkit xhost
+```
+
+### Получение исходников
+
+```bash
+git clone https://github.com/Exordio/intermux.git
 cd intermux
-
-# Python Virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install Python dependencies
-pip3 install -r requirements.txt
+sudo python3 cli.py check
 ```
 
-### Verify Dependencies
+`check` показывает, каких системных утилит не хватает, и как их установить.
 
-```bash
-python3 cli.py check
-```
+## Использование
 
-## 🧩 Packeges Required (If everything above fails)
-
-- You can explicitly install these packeges, if all the above given installation steps fails. 
-```
-Brotli==1.1.0
-click==8.2.1
-markdown2==2.5.3
-MarkupSafe==3.0.2
-minijinja==2.11.0
-page==0.3
-PyYAML==6.0.2
-tk==0.1.0
-```
-
-
-## 📖 Usage
-
-### 🎨 GUI Mode (Recommended)
+### GUI
 
 ```bash
 python3 gui/app.py
 ```
 
-The GUI requests root via `pkexec` (falls back to `sudo`). Apps always launch as **your regular user** — your profile data is preserved.
+Запускать можно от обычного пользователя: программа сама перезапустится с правами root через `pkexec` или, если его нет, через `sudo -E`.
 
-<details>
-<summary><strong>GUI Features</strong></summary>
+Порядок работы:
 
-- **Interface Selection**: Dropdown with all active physical interfaces (virtual adapters like veth/docker are auto-hidden)
-- **Application Binding**: Enter app path and assign to an interface
-- **Running App Detection**: Prompts to close & reopen (default profile) or open new instance
-- **Session Awareness**: Auto-detects X11 or Wayland
-- **Dependency Banner**: Warns about missing system tools
+1. Выберите интерфейс в списке. Виртуальные интерфейсы (`veth`, `docker`, `br-`, `tun`, `tap`, `virbr`, `vmnet`, `vboxnet`) скрыты, нажмите «Refresh», чтобы обновить список.
+2. Введите имя команды из `PATH` (например, `firefox`) или полный путь к исполняемому файлу и нажмите «Add».
+3. Нажмите «Assign», и все приложения из списка Pending будут запущены.
 
-</details>
+Кнопки:
 
-### 💻 CLI Mode
+- «Clear All» очищает списки и удаляет таблицы маршрутизации `*_rt`.
+- «Reset Everything» удаляет veth-интерфейсы, namespace, правила policy routing, таблицы 201–453 и правила `MASQUERADE`, созданные InterMux.
 
-#### 1. List Active Interfaces
+Если приложение уже запущено, будет предложено закрыть его и запустить заново через выбранный интерфейс, открыть второй экземпляр с отдельным профилем или отменить запуск.
+
+`gui/gui.py` — старое окно со списком интерфейсов. Кнопка «Create routing tables» в нём просто открывает `gui/app.py`.
+
+### CLI
+
+Все команды CLI требуют root.
 
 ```bash
+# Список активных интерфейсов с IP-адресами и шлюзами
 sudo python3 cli.py list
+
+# Запустить приложение через указанный интерфейс
+sudo python3 cli.py assign --app firefox --iface wlan0
+
+# Проверить системные зависимости
+sudo python3 cli.py check
+
+# Удалить таблицы маршрутизации *_rt из rt_tables
+sudo python3 cli.py clear
+
+# Удалить namespace, созданные для активных интерфейсов
+sudo python3 cli.py reset
 ```
 
-#### 2. Assign Application to Interface
-
-```bash
-sudo python3 cli.py assign --app /usr/lib/firefox/firefox --iface wlan0
-```
-
-If Firefox is already open, you'll be prompted:
+Если приложение уже запущено, `assign` спросит, что делать:
 
 ```
 [!] 'firefox' is already running (PID(s): [12345]).
@@ -201,177 +123,73 @@ If Firefox is already open, you'll be prompted:
     Enter choice [1/2/3]:
 ```
 
-#### 3. Check Dependencies
+## Firefox
 
-```bash
-python3 cli.py check
-```
+- Если Firefox не запущен или выбран вариант «закрыть и открыть заново», используется ваш основной профиль.
+- Если выбран второй экземпляр, создаётся отдельный постоянный профиль `~/.mozilla/firefox/intermux-<интерфейс>`. Закладки, cookie и расширения основного профиля в нём недоступны.
+- Вариант «закрыть и открыть заново» сначала отправляет `SIGTERM` всем процессам, в командной строке которых встречается имя приложения, а через 1,5 секунды — `SIGKILL`. Firefox может не успеть корректно завершиться, поэтому восстановление сессии не гарантируется.
 
-#### 4. Clear All Paths
+## Ограничения
 
-```bash
-sudo python3 cli.py clear
-```
+- **Одно приложение на интерфейс.** При каждом назначении namespace для интерфейса пересоздаётся. Приложение, запущенное через этот интерфейс ранее, теряет сеть.
+- **Только IPv4.** Переадресация и NAT настраиваются только для IPv4, в namespace нет IPv6.
+- **CLI не настраивает policy routing** (шаг 4 выше) и выбирает подсеть через `hash()`, который меняется между запусками. Через CLI надёжно работает только интерфейс, через который и так идёт основной маршрут системы. Для остальных используйте GUI.
+- **Сброс неполный.** Правило `iptables -A FORWARD -j ACCEPT` добавляется при каждом назначении и не удаляется ни одним из вариантов сброса; `net.ipv4.ip_forward` тоже остаётся включённым. `cli.py reset` не удаляет правила `iptables` и policy routing — для этого используйте «Reset Everything» в GUI. После перезагрузки namespace, маршруты и правила `iptables` исчезают, но записи в `rt_tables` и каталоги `/etc/netns/ns_*` остаются.
+- **Chromium** запрещён в коде: по словам автора оригинального проекта, его песочница конфликтует с network namespaces. Другие браузеры на базе Chromium (Chrome, Brave и т. д.) не блокируются, но их работа не проверялась.
+- Namespace изолирует только сеть. Файлы, процессы и права пользователя остаются общими с системой, поэтому как средство безопасности это не годится.
 
-#### 5. Reset Everything
-
-```bash
-sudo python3 cli.py reset
-```
-
-## 🎥 Tutorial Video
-
-<video controls width="100%">
-  <source src="https://res.cloudinary.com/dzsghc33d/video/upload/v1752167379/Screencast_20250710_223520_gfnqkq.webm" type="video/webm">
-  Your browser does not support the video tag.
-</video>
-
-
-## 🎥 Tutorial Video
-
-![Screencast_20250710_223520_gfnqkq](https://github.com/user-attachments/assets/c018bddd-7f32-4471-a3f1-da75d4463c3c)
-
-
-## 🏗️ Architecture
+## Структура проекта
 
 ```
 intermux/
-├── core/                   # Core functionality
-│   ├── interface.py        # Network interface detection (cross-distro)
-│   ├── router.py           # Routing table management
-│   └── platform_utils.py   # ★ Distro detection, display/DNS/user helpers
-├── gui/                    # GUI components
-│   ├── app.py              # Main GUI application
-│   └── gui.py              # Legacy GUI interface
-├── cli.py                  # CLI entrypoint
-├── requirements.txt        # Python dependencies
-└── README.md               # This file
+├── cli.py                  # Консольный интерфейс
+├── core/
+│   ├── interface.py        # Обнаружение интерфейсов через ip
+│   ├── router.py           # Таблицы маршрутизации в rt_tables
+│   └── platform_utils.py   # Дистрибутив, пользователь, окружение сессии, DNS, зависимости
+├── gui/
+│   ├── app.py              # Основной GUI (Tk)
+│   └── gui.py              # Старое окно со списком интерфейсов
+├── release_notes.md
+└── license
 ```
 
-### 🔧 How It Works
+## Настройка
 
-1. **Interface Detection**: Scans system for all network interfaces using `ip` commands
-2. **Routing Tables**: Creates custom routing tables in `/etc/iproute2/rt_tables`
-3. **Network Namespaces**: Isolates network traffic using Linux network namespaces
-4. **Virtual Interfaces**: Uses veth pairs to connect namespaces to physical interfaces
-5. **IP Forwarding**: Configures NAT/masquerading for namespace connectivity
-6. **Privilege Separation**: Namespace setup runs as root; apps launch as **your user** via `sudo -u`
-7. **DNS Resolution**: Writes real upstream DNS servers to namespace (handles `systemd-resolved` stubs)
+Номера таблиц маршрутизации для интерфейсов (`<iface>_rt`) задаются в `core/router.py`:
 
-### 🔐 Privilege Model
-
-| Operation | Runs As |
-|-----------|---------|
-| Create network namespace | root |
-| Configure veth / routing / NAT | root |
-| Write namespace resolv.conf | root |
-| **Launch your application** | **your regular user** |
-
-## 🛠️ Advanced Configuration
-
-### Custom Routing Table IDs
-
-Edit `core/router.py`:
 ```python
-BASE_TABLE_ID = 100  # Starting table ID
-BASE_PRIORITY = 1000 # Starting priority
+BASE_TABLE_ID = 100   # номер первой таблицы
+BASE_PRIORITY = 1000  # приоритет ip rule = BASE_PRIORITY + номер таблицы
 ```
 
-## 🐛 Troubleshooting
+Таблицы для подсетей namespace (`200 + N`) и их приоритеты (`500 + N`) заданы в `gui/app.py`, в функции `assign()`.
 
-<details>
-<summary><strong>GUI doesn't launch on Wayland</strong></summary>
+Файл `rt_tables` ищется в `/etc/iproute2/rt_tables`, затем в `/usr/share/iproute2/rt_tables`.
 
-InterMux auto-detects Wayland. If issues occur, ensure `xwayland` is installed:
+## Диагностика
+
+GUI ведёт подробный лог (уровень DEBUG, со стектрейсами) в `~/.local/share/intermux/intermux.log` того пользователя, от имени которого работает процесс. После повышения прав это обычно root, то есть `/root/.local/share/intermux/intermux.log`. CLI пишет только в консоль.
+
+Если интерфейс не отображается, проверьте, что он поднят и у него есть IP-адрес:
 
 ```bash
-# Arch
-sudo pacman -S xorg-xwayland
-# Ubuntu/Debian
-sudo apt install xwayland
+ip addr show
+sudo ip link set <интерфейс> up
 ```
-</details>
 
-<details>
-<summary><strong>Permission denied errors</strong></summary>
+Если в приложении нет интернета:
 
 ```bash
-sudo python3 cli.py assign --app /usr/lib/firefox/firefox --iface wlan0
+sudo python3 cli.py check
+sysctl net.ipv4.ip_forward               # должно быть 1
+sudo iptables -t nat -S POSTROUTING      # должно быть правило MASQUERADE для 10.0.N.0/24
+ip rule show                             # должно быть правило from 10.0.N.0/24
+sudo ip netns exec ns_<hash> ping -c1 1.1.1.1
 ```
-</details>
 
-<details>
-<summary><strong>Interface not detected</strong></summary>
+Если GUI не запускается на Wayland, проверьте, что установлен XWayland (`xorg-xwayland` в Arch, `xwayland` в Debian/Ubuntu).
 
-```bash
-ip link show
-sudo ip link set <interface> up
-```
-</details>
+## Лицензия
 
-<details>
-<summary><strong>No internet in namespace / DNS failures</strong></summary>
-
-```bash
-python3 cli.py check
-sudo sysctl -w net.ipv4.ip_forward=1
-```
-</details>
-
-### 📝 Logs and Debugging
-
-InterMux automatically logs all activity, commands, and errors to a persistent log file:
-```bash
-~/.local/share/intermux/intermux.log
-```
-This log includes detailed debug information and full stack traces, which is highly recommended to include when reporting issues.
-
-## ⚠️ Known Limitations
-
-### Browser Compatibility
-
-- ✅ **Firefox**: Fully supported — uses your existing profile, prompts if already running
-- ❌ **Chromium**: Not supported due to sandboxing conflicts with network namespaces
-- ✅ **Most other apps**: GUI and CLI applications work correctly
-
-### Platform Support
-
-- ✅ **Linux (all major distros)**: Arch, Ubuntu, Debian, Fedora, openSUSE, Manjaro, EndeavourOS, etc.
-- ✅ **X11 and Wayland**: Both session types supported
-- 🔜 **Windows**: Planned for a future release
-
-### System Requirements
-
-- Root privileges for network namespace operations
-- Linux kernel with `CONFIG_NET_NS`
-- `iproute2` for network management
-
-## 🤝 Contributing
-
-Contributions are welcome! Please submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes
-4. Push and open a Pull Request
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](license) file for details.
-
-## 🙏 Acknowledgments
-
-- Built with Python and Tkinter
-- Uses Linux networking stack (iproute2)
-- Inspired by the need for better network interface management
-
-## 📞 Support
-
-- 🐛 [Report bugs](https://github.com/Rishi-Bhati/intermux/issues)
-- 💡 [Request features](https://github.com/Rishi-Bhati/intermux/issues)
-
----
-
-<div align="center">
-  <strong>Made with ❤️ for the Linux community</strong>
-</div>
+MIT, см. [license](license). Исходный код: Rishi Bhati, 2025.
