@@ -26,11 +26,13 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    entries = namespace.active()
-    if not entries:
+    states = namespace.active()
+    if not states:
         print("No namespaces.")
-    for entry in entries:
+    for state in states:
+        entry = state.entry
         print(entry.namespace)
+        print(f"  State:     {state.connection}")
         print(f"  Interface: {entry.interface}")
         print(f"  Subnet:    {entry.subnet}")
         print(f"  Route:     {entry.route}")
@@ -61,6 +63,12 @@ def cmd_dns(args: argparse.Namespace) -> int:
         print(f"Error: {exc}")
         return 1
     print(f"{ns.name}: {', '.join(servers)}")
+    return 0
+
+
+def cmd_reconnect(args: argparse.Namespace) -> int:
+    reconnected = namespace.reconnect_lost()
+    print(f"Reconnected: {', '.join(reconnected)}" if reconnected else "Nothing to reconnect.")
     return 0
 
 
@@ -104,6 +112,8 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("list", help="list interfaces that can be used").set_defaults(func=cmd_list, root=False)
     commands.add_parser("check", help="check system dependencies").set_defaults(func=cmd_check, root=False)
     commands.add_parser("status", help="show namespaces and what they serve").set_defaults(func=cmd_status, root=False)
+    commands.add_parser("reconnect", help="reconnect namespaces whose interface came back") \
+        .set_defaults(func=cmd_reconnect, root=True)
     commands.add_parser("reset", help="remove everything InterMux created").set_defaults(func=cmd_reset, root=True)
     assign = commands.add_parser("assign", help="start an application through an interface")
     assign.add_argument("--app", required=True, help="command name from PATH or path to the executable")

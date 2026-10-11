@@ -21,6 +21,12 @@ log = logging.getLogger(__name__)
 NETNS_ETC = "/etc/netns"
 TABLE_BASE = 200
 PRIORITY_BASE = 500
+FALLBACK_METRIC = "4096"
+
+CONNECTED = "connected"
+NO_ROUTE = "no route"
+INTERFACE_DOWN = "interface down"
+INTERFACE_MISSING = "interface missing"
 
 _NAME = re.compile(r"^ns_([0-9a-f]{8})$")
 _POLICY_RULE = re.compile(r"^(\d+):\s+from 10\.0\.(\d+)\.0/24 .*lookup (\d+)")
@@ -36,6 +42,10 @@ class Namespace:
     @classmethod
     def for_interface(cls, iface: str) -> Namespace:
         return cls(hashlib.md5(iface.encode()).hexdigest()[:8])
+
+    @classmethod
+    def from_name(cls, name: str) -> Namespace:
+        return cls(name.removeprefix("ns_"))
 
     @property
     def name(self) -> str:
@@ -82,6 +92,16 @@ class Namespace:
         return f"intermux:{self.name}"
 
 
+@dataclass
+class State:
+    entry: registry.Entry
+    connection: str
+
+    @property
+    def ns(self) -> Namespace:
+        return Namespace.from_name(self.entry.namespace)
+
+
 def existing() -> list[Namespace]:
     names = (line.split()[0] for line in run(IP, "netns", "list", check=False).splitlines() if line.strip())
     return [Namespace(match.group(1)) for match in map(_NAME.match, names) if match]
@@ -111,7 +131,7 @@ def setup(iface: Interface, dns_servers: list[str] | None = None) -> Namespace:
     servers, auto = _apply_dns(ns, iface, dns_servers)
     registry.save(registry.Entry(
         namespace=ns.name, interface=iface.name, subnet=ns.subnet,
-        route=" ".join(route) if route else "host default route",
+        route=" ".join(route) if route else "none",
         dns=servers, dns_auto=auto, apps=previous.apps if previous else [],
     ))
     return ns
@@ -128,18 +148,42 @@ def set_dns(ns: Namespace, dns_servers: list[str] | None) -> list[str]:
     return servers
 
 
-def active() -> list[registry.Entry]:
-    """Live namespaces with only the apps that still run in them."""
+def active() -> list[State]:
+    """Live namespaces with their connection state and only the apps that still run in them."""
+    all_interfaces = {iface.name: iface for iface in interfaces.all_interfaces()}
     result = []
     for ns in existing():
         entry = registry.load(ns.name) or registry.Entry(
-            namespace=ns.name, interface=_guess_interface(ns), subnet=ns.subnet, route="?",
+            namespace=ns.name, interface=_guess_interface(ns, all_interfaces), subnet=ns.subnet, route="?",
             dns=dns.read_resolv_conf(ns.etc_dir), dns_auto=False,
         )
         running = processes.names_in_namespace(ns.name)
         entry.apps = [app for app in entry.apps if processes.process_name(app) in running]
-        result.append(entry)
+        result.append(State(entry, _connection(ns, all_interfaces.get(entry.interface))))
     return result
+
+
+def reconnect(ns: Namespace) -> bool:
+    """Route the namespace through its interface again, e.g. after a VPN reconnect.
+
+    Returns False if the interface is still not usable.
+    """
+    entry = registry.load(ns.name)
+    iface = interfaces.find(entry.interface if entry else _guess_interface(ns, {}))
+    if iface is None or not iface.up or _default_route(iface) is None:
+        return False
+    log.info("Reconnecting %s to %s", ns.name, iface.name)
+    _unwire(ns)
+    route = _wire(ns, iface)
+    if entry:
+        entry.route = " ".join(route) if route else "none"
+        registry.save(entry)
+    return True
+
+
+def reconnect_lost() -> list[str]:
+    """Reconnect every namespace whose interface came back. Returns their names."""
+    return [state.entry.namespace for state in active() if state.connection == NO_ROUTE and reconnect(state.ns)]
 
 
 def teardown(ns: Namespace) -> None:
@@ -166,10 +210,19 @@ def reset() -> None:
     _drop_legacy_rt_tables()
 
 
-def _guess_interface(ns: Namespace) -> str:
+def _guess_interface(ns: Namespace, known: dict[str, Interface]) -> str:
     """For namespaces created before the registry existed."""
-    names = (iface.name for iface in interfaces.all_interfaces())
+    names = known or {iface.name: iface for iface in interfaces.all_interfaces()}
     return next((name for name in names if Namespace.for_interface(name) == ns), "?")
+
+
+def _connection(ns: Namespace, iface: Interface | None) -> str:
+    if iface is None:
+        return INTERFACE_MISSING
+    if not iface.up:
+        return INTERFACE_DOWN
+    routes = run(IP, "route", "show", "table", ns.table, check=False).splitlines()
+    return CONNECTED if any(not route.startswith("unreachable") for route in routes) else NO_ROUTE
 
 
 def _is_alive(ns: Namespace) -> bool:
@@ -201,13 +254,16 @@ def _wire(ns: Namespace, iface: Interface) -> list[str] | None:
 
     # Without its own table the namespace traffic would leave through the host's default route.
     # iif keeps the host's own replies to the namespace (source 10.0.N.1) in the main table.
+    # The kernel drops routes of an interface that goes away (VPN disconnected, Wi-Fi lost);
+    # the unreachable fallback keeps the lookup from falling through to the main table then.
+    run(IP, "route", "add", "unreachable", "default", "metric", FALLBACK_METRIC, "table", ns.table)
+    run(IP, "rule", "add", "from", ns.subnet, "iif", ns.host_veth, "table", ns.table, "priority", ns.priority)
     route = _default_route(iface)
     if route:
         run(IP, "route", "add", "default", *route, "table", ns.table)
-        run(IP, "rule", "add", "from", ns.subnet, "iif", ns.host_veth, "table", ns.table, "priority", ns.priority)
         log.info("Routing %s %s (table %s)", ns.subnet, " ".join(route), ns.table)
     else:
-        log.warning("%s has no gateway, %s will use the host's default route", iface.name, ns.name)
+        log.warning("%s has no gateway, %s has no network until it gets one", iface.name, ns.name)
     return route
 
 

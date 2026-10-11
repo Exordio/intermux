@@ -33,7 +33,7 @@ class App:
         self.pending: list[tuple[str, str, list[str] | None]] = []
 
         root.title("InterMux")
-        root.geometry("960x720")
+        root.geometry("1020x720")
         theme.apply(root)
 
         main = ttk.Frame(root, padding=20)
@@ -75,7 +75,8 @@ class App:
         )
         self.active_table = self._section(
             main, "Active namespaces",
-            {"Namespace": 110, "Interface": 90, "Subnet": 120, "Route": 230, "DNS": 220, "Apps": 150}, height=6,
+            {"Namespace": 110, "State": 130, "Interface": 90, "Subnet": 115, "Route": 200, "DNS": 200, "Apps": 130},
+            height=6,
             buttons=(("Set DNS for selected", self.set_dns), ("Reset Everything", self.reset)),
         )
 
@@ -111,14 +112,17 @@ class App:
     def refresh_active(self) -> None:
         selected = self.active_table.selection()
         self.active_table.delete(*self.active_table.get_children())
-        for entry in namespace.active():
+        for state in namespace.active():
+            entry = state.entry
             dns_text = ", ".join(entry.dns) + (" (auto)" if entry.dns_auto else "")
             apps = ", ".join(map(os.path.basename, entry.apps)) or "-"
             self.active_table.insert("", tk.END, iid=entry.namespace, values=(
-                entry.namespace, entry.interface, entry.subnet, entry.route, dns_text, apps))
+                entry.namespace, state.connection, entry.interface, entry.subnet, entry.route, dns_text, apps))
         self.active_table.selection_set([iid for iid in selected if self.active_table.exists(iid)])
 
     def _schedule_active_refresh(self) -> None:
+        for name in namespace.reconnect_lost():
+            log.info("%s reconnected: its interface is back", name)
         self.refresh_active()
         self.root.after(ACTIVE_REFRESH_MS, self._schedule_active_refresh)
 
@@ -180,7 +184,7 @@ class App:
         except ValueError as exc:
             messagebox.showerror("Invalid DNS", str(exc))
             return
-        namespace.set_dns(Namespace(selected[0].removeprefix("ns_")), servers)
+        namespace.set_dns(Namespace.from_name(selected[0]), servers)
         self.refresh_active()
 
     def reset(self) -> None:
