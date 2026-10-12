@@ -17,7 +17,7 @@ from intermux.log import setup as setup_logging
 from intermux.net import dns, interfaces, namespace, shaping, traffic
 from intermux.net.namespace import State
 from intermux.system import deps
-from intermux.system.privileges import is_root, reexec_as_root
+from intermux.system.privileges import is_root, reexec_as_root, restore_session_env
 from intermux.system.session import allow_root_on_display, session_env
 from intermux.system.shell import CommandError
 from intermux.system.users import User, invoking_user
@@ -359,6 +359,7 @@ class App:
 def main() -> None:
     if not is_root():
         reexec_as_root("intermux.gui")
+    restore_session_env()
     setup_logging()
     user = invoking_user()
     env = session_env(user)

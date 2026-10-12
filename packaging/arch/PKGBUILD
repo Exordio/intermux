@@ -35,6 +35,8 @@ package() {
   cd "$_pkgname"
   /usr/bin/python -m installer --destdir="$pkgdir" dist/*.whl
   install -Dm644 packaging/intermux.desktop "$pkgdir/usr/share/applications/intermux.desktop"
+  install -Dm644 packaging/io.github.exordio.intermux.policy \
+    "$pkgdir/usr/share/polkit-1/actions/io.github.exordio.intermux.policy"
   local size
   for size in 32 48 64 128 256 512; do
     install -Dm644 "intermux/gui/icons/intermux-$size.png" \

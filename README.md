@@ -99,11 +99,14 @@ The script installs from the current checkout:
 
 - the code to `/opt/intermux`, owned by root: the GUI runs as root, so the code it runs must not be writable by a regular user;
 - the `intermux` (CLI) and `intermux-gui` commands to `/usr/local/bin`;
-- the InterMux entry to the application menu (`/usr/local/share/applications/intermux.desktop`) and its icon to `/usr/local/share/icons/hicolor`.
+- the InterMux entry to the application menu (`/usr/local/share/applications/intermux.desktop`) and its icon to `/usr/local/share/icons/hicolor`;
+- the polkit action for `intermux-gui` to `/usr/share/polkit-1/actions`.
 
 After that start the GUI from the application menu or with `intermux-gui`, and use `intermux` instead of `python3 -m intermux` (for example, `sudo intermux assign --app firefox --iface wlan0`). Started from the menu, the GUI asks for the password through polkit (`pkexec`), which KDE, GNOME and other desktops provide; without `pkexec` it has to be started from a terminal, where `sudo` can ask for the password.
 
-To update, pull the changes and run `sudo ./install.sh` again. To remove, run `sudo ./install.sh --uninstall`; per-user history and app logs in `~/.local/share/intermux` are kept. `PREFIX` (default `/usr/local`) and `TARGET` (default `/opt/intermux`) can be overridden from the environment.
+The password prompt shows the InterMux icon and a message saying what the rights are needed for. The package and `install.sh` install a polkit action for this: polkit picks it by the path of the program, so the GUI restarts itself as root through the installed `intermux-gui`. Started from the checkout (`python3 -m intermux.gui`), the GUI gets the generic pkexec prompt with the full command line instead.
+
+To update, pull the changes and run `sudo ./install.sh` again. To remove, run `sudo ./install.sh --uninstall`; per-user history and app logs in `~/.local/share/intermux` are kept. `PREFIX` (default `/usr/local`), `TARGET` (default `/opt/intermux`) and `POLKIT_ACTIONS` (default `/usr/share/polkit-1/actions`) can be overridden from the environment.
 
 ## Usage
 
@@ -263,7 +266,8 @@ pyproject.toml          # Python package metadata, version in intermux/__init__.
 install.sh              # Installation without a package, see above
 packaging/
 ├── arch/PKGBUILD       # Arch Linux package
-└── intermux.desktop    # Application menu entry
+├── intermux.desktop    # Application menu entry
+└── io.github.exordio.intermux.policy  # polkit action: message and icon of the password prompt
 intermux/
 ├── __main__.py         # python3 -m intermux → cli.main()
 ├── cli.py              # Command line interface

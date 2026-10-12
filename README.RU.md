@@ -99,11 +99,14 @@ sudo ./install.sh
 
 - код — в `/opt/intermux`, владелец root: GUI работает от root, поэтому исполняемый им код не должен быть доступен для записи обычному пользователю;
 - команды `intermux` (CLI) и `intermux-gui` — в `/usr/local/bin`;
-- пункт InterMux в меню приложений (`/usr/local/share/applications/intermux.desktop`) и его иконку — в `/usr/local/share/icons/hicolor`.
+- пункт InterMux в меню приложений (`/usr/local/share/applications/intermux.desktop`) и его иконку — в `/usr/local/share/icons/hicolor`;
+- действие polkit для `intermux-gui` — в `/usr/share/polkit-1/actions`.
 
 После этого GUI запускается из меню приложений или командой `intermux-gui`, а вместо `python3 -m intermux` используется `intermux` (например, `sudo intermux assign --app firefox --iface wlan0`). При запуске из меню GUI запрашивает пароль через polkit (`pkexec`), который есть в KDE, GNOME и других окружениях; без `pkexec` его нужно запускать из терминала, где пароль запросит `sudo`.
 
-Для обновления получите изменения и снова выполните `sudo ./install.sh`. Для удаления — `sudo ./install.sh --uninstall`; история и логи приложений в `~/.local/share/intermux` пользователей сохраняются. `PREFIX` (по умолчанию `/usr/local`) и `TARGET` (по умолчанию `/opt/intermux`) можно переопределить через окружение.
+В окне запроса пароля показывается иконка InterMux и сообщение о том, зачем нужны права. Для этого пакет и `install.sh` устанавливают действие polkit: polkit выбирает его по пути к программе, поэтому GUI перезапускается с правами root через установленный `intermux-gui`. При запуске из копии репозитория (`python3 -m intermux.gui`) показывается стандартный запрос pkexec с полной командной строкой.
+
+Для обновления получите изменения и снова выполните `sudo ./install.sh`. Для удаления — `sudo ./install.sh --uninstall`; история и логи приложений в `~/.local/share/intermux` пользователей сохраняются. `PREFIX` (по умолчанию `/usr/local`), `TARGET` (по умолчанию `/opt/intermux`) и `POLKIT_ACTIONS` (по умолчанию `/usr/share/polkit-1/actions`) можно переопределить через окружение.
 
 ## Использование
 
@@ -263,7 +266,8 @@ pyproject.toml          # Описание Python-пакета, версия —
 install.sh              # Установка без пакета, см. выше
 packaging/
 ├── arch/PKGBUILD       # Пакет для Arch Linux
-└── intermux.desktop    # Пункт меню приложений
+├── intermux.desktop    # Пункт меню приложений
+└── io.github.exordio.intermux.policy  # Действие polkit: сообщение и иконка запроса пароля
 intermux/
 ├── __main__.py         # python3 -m intermux → cli.main()
 ├── cli.py              # Консольный интерфейс
