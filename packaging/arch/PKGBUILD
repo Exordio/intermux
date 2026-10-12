@@ -26,8 +26,10 @@ pkgver() {
 }
 
 # The system interpreter explicitly: an activated venv must not end up in the shebangs of /usr/bin/intermux*.
+# src/ survives between makepkg runs, so wheels and build files of the previous version are removed first.
 build() {
   cd "$_pkgname"
+  rm -rf build dist
   /usr/bin/python -m build --wheel --no-isolation
 }
 
