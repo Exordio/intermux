@@ -4,10 +4,10 @@ English | [Русский](README.RU.md)
 
 A Linux tool that runs an application so that all of its network traffic goes through an interface you choose. For example: a browser through Wi-Fi, a torrent client through a USB modem or Ethernet, something else through a VPN.
 
-This is a fork of [Rishi-Bhati/intermux](https://github.com/Rishi-Bhati/intermux). It runs on Linux only; Windows support is not planned in this fork and was removed by reverting the upstream commits that added it.
+This is a hard fork of [Rishi-Bhati/intermux](https://github.com/Rishi-Bhati/intermux), developed independently of it. It started from upstream 1.1.0 and has diverged far since then: the code has been rewritten as a Python package with a different structure; most of the features (VPN interfaces, DNS per namespace, control of running apps, traffic and bandwidth limits, moving a namespace to another interface, packaging) do not exist upstream; and it fixes a long list of upstream bugs, including traffic leaking past the selected interface and a flush of the host's main routing table. It runs on Linux only; Windows support is not planned and was removed by reverting the upstream commits that added it.
 
 ![InterMux window](https://i.imgur.com/RmaScAW.png)
-https://imgur.com/a/HEHiCZp
+
 ## How it works
 
 For every interface you pick, InterMux creates a separate network namespace and starts the application inside it:
