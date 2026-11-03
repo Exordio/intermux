@@ -57,7 +57,7 @@ def launch(app: str, ns: Namespace, iface: str, user: User, separate_profile: bo
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w") as output:
         process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
-                                   start_new_session=True)
+                                   start_new_session=True, cwd=user.home)
     give_to(user, output_path)
     log.info("Started %s as %s in %s via %s, output in %s",
              os.path.basename(app), user.name, ns.name, iface, output_path)
